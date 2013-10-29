@@ -18,25 +18,36 @@ $project = get_request ( 'project' , 'wikimedia' ) ;
 $depth = floor ( get_request ( 'depth' , 0 ) ) ;
 $namespace = floor ( get_request ( 'namespace' , 6 ) ) ;
 
+$tsf = "D, d M Y H:i:s " ;
+$tstz = "GMT" ;
+
+function escape4xml ( $text ) {
+	$doc = new DOMDocument();
+	$fragment = $doc->createDocumentFragment();
+	$fragment->appendChild($doc->createTextNode($text));
+	return $doc->saveXML($fragment);
+//	return urlencode ( $text ) ;
+}
 
 function print_before_items () {
   global $motd , $category , $images , $firstcat , $user , $size , $last , $test , $project , $language , $depth ;
+  global $tsf , $tstz ;
+
   $ts = $images[$firstcat]->thets ; #img_timestamp ;
-  $ts = str_replace ( ':' , '' , $ts ) ;
-  $ts = str_replace ( '-' , '' , $ts ) ;
-  $ts = str_replace ( ' ' , '' , $ts ) ;
+  if ( $ts == '' ) $ts = date ( $tsf ) . $tstz ; // Dirty hack; using current date
+  else {
+	$ts = DateTime::createFromFormat ( 'Y-m-d H:i:s' , $ts ) ;
+	$ts = $ts->format ( $tsf ) . $tstz ;
+  }
   
   $d = '' ;
   if ( $depth > 0 ) $d = "(depth $depth) " ;
   
+  $ownpath = '//'.$_SERVER["SERVER_NAME"].escape4xml($_SERVER['REQUEST_URI']) ;
   print '<?xml version="1.0" encoding="UTF-8"?>
-  <rss version="2.0" 
-    xmlns:media="http://search.yahoo.com/mrss/"
-    xmlns:dc="http://purl.org/dc/elements/1.1/"
-    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-    xmlns:foaf="http://xmlns.com/foaf/0.1/">
-  <channel>' ;
-//    xmlns:ocwlom="http://cwspace.mit.edu/docs/xsd/lomv1.0/ocwExtend/version10"
+  <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+  <atom:link href="'.$ownpath.'" rel="self" type="application/rss+xml" />' ;
 
   $info = $category ;
   if ( $info == "" && $user != "" ) $info = "Uploads by User:" . $user ;
@@ -53,7 +64,6 @@ function print_before_items () {
     print "<description>Feed for Media file of the Day from $language.$project.org</description>" ;
   
   print "<language>en-us</language><copyright>Feed: GNU Free Documentation License; Images: see description page</copyright>" ;
-  if ( $ts == '' ) $ts = date ( "D, d M Y H:i:s " ) . "UTC" ; // Dirty hack
   print "<pubDate>{$ts}</pubDate><lastBuildDate>{$ts}</lastBuildDate>" ;
 
   print "<generator>CatFood</generator>
@@ -66,7 +76,7 @@ function print_before_items () {
     else print get_thumbnail_url ( "commons" , "Wikipedia-logo-$language.png" , 135 , "wikimedia" ) ;
     
     print "</url>
-    <title>$language.$project.org</title>
+    <title>$info $d- $language.$project.org</title>
     <link>http://tools.wmflabs.org/catfood/catfood.php</link>
   </image>
   " ;
@@ -179,20 +189,24 @@ $images = Array () ;
 $pages = Array () ;
 
 if ( $motd != "" ) { // Medium of the Day
+/*
   $today = time () ;
   $wq = new WikiQuery ( 'commons' , 'wikimedia' ) ;
+  
+	$ctx = stream_context_create(array('http' => array('timeout' => 5)));
+
   for ( $i = 0 ; $i < $last ; $i++ ) {
     $title = "Template:Motd/" . date ( "Y-m-j" , $today - 3600*24*$i ) ;
     $title_desc = "Template:Motd/" . date ( "Y-m-j" , $today - 3600*24*$i ) . " (en)";
     $url = $wq->get_article_url ( $title , 'raw' ) ;
-    $file = file_get_contents ( $url ) ;
+    $file = file_get_contents ( $url , 0 , $ctx ) ;
 	$file = explode ( '|' , $file ) ;
 	$file = explode ( '=' , $file[1] , 2 ) ;
 	$file = array_pop ( $file ) ;
 
 	$desc = "" ;
 	$url = $wq->get_article_url ( $title_desc , 'raw' ) ;
-	$desc = @file_get_contents ( $url ) ;
+	$desc = @file_get_contents ( $url , 0 , $ctx ) ;
 	$desc = preg_replace ( '/^.+?1=/' , '' , $desc ) ;
 	$desc = preg_replace ( '/\|2=.*$/' , '' , $desc ) ;
 
@@ -206,6 +220,7 @@ if ( $motd != "" ) { // Medium of the Day
       if ( $firstcat == "" ) $firstcat = $o->img_timestamp ;
     }
   }
+*/
 
 } else if ( $namespace != 6 ) {
 
@@ -295,16 +310,15 @@ foreach ( $images AS $c ) {
   
   $timestamp = expand_ts ( $c->img_timestamp ) ;
   $ts = strtotime ( $timestamp ) ;
-  $timestamp = date ( "D, d M Y H:i:s " , $ts ) . "UTC" ;
-  
+  $timestamp = date ( $tsf , $ts ) . $tstz ;
   $ts = strtotime ( $c->thets ) ;
-  $realts = date ( "D, d M Y H:i:s " , $ts ) . "UTC" ;
+  $realts = date ( $tsf , $ts ) . $tstz ;
   
   $nicesize = number_format ( $c->img_size , 0 , "" , "." ) ;
   
   $descurl = "http://$language.$project.org/wiki/" ;
   if ( $namespace == 6 ) $descurl .= "File:" ;
-  $descurl .= $c->img_name ;
+  $descurl .= urlencode ( $c->img_name ) ;
   $guid = $descurl ;
   if ( isset ( $cats[$c->page_id] ) ) $licenses = get_licenses ( $cats[$c->page_id] ) ;
   else $licenses = "" ;
@@ -348,9 +362,9 @@ foreach ( $images AS $c ) {
   $desc = str_replace ( ">" , "&gt;" , $desc ) ;
   
   print "\n<item>\n" ;
-  print " <title>$title</title>\n" ;
+  print " <title>" . escape4xml($title) . "</title>\n" ;
   print " <pubDate>$realts</pubDate>\n" ;
-  print " <link>{$descurl}</link>\n" ;
+  print " <link>" . $descurl . "</link>\n" ;
   print " <guid isPermaLink=\"false\">$guid</guid>\n" ;
   print " <description>\n" ;
   print "$desc\n" ;
