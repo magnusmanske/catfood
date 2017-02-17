@@ -36,7 +36,9 @@ function print_before_items () {
   $ts = $images[$firstcat]->thets ; #img_timestamp ;
   if ( $ts == '' ) $ts = date ( $tsf ) . $tstz ; // Dirty hack; using current date
   else {
-	$ts = DateTime::createFromFormat ( 'Y-m-d H:i:s' , $ts ) ;
+  	$tso = $ts ;
+	$ts = DateTime::createFromFormat ( 'Y-m-d H:i:s' , $tso ) ;
+	if ( $ts === false ) $ts = new DateTime ( $tso ) ;
 	$ts = $ts->format ( $tsf ) . $tstz ;
   }
   
@@ -168,7 +170,7 @@ Enter the information below, or use URL parameters (click on \"Do it!\" for a de
 </td><td>maximum height/width
 </td></tr>
 <tr><th>Number</th><td><input type='text' name='last' value='10' /></td><td>last X images/pages; 1-100</td></tr>
-<tr><td/><td><input type='submit' name='doit' value='Do it' /></td><td></td></tr>
+<tr><td/><td><input type='submit' name='doit' value='Do it' class='btn btn-primary' /></td><td></td></tr>
 </table>
 </form>
 Or get a feed of the <a href=\"http://tools.wmflabs.org/catfood/catfood.php?motd=1\">Media file of the Day</a>!
