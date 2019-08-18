@@ -8,8 +8,8 @@ set_time_limit ( 5*60 ) ; # 5min
 //$hide_doctype = 1 ;
 include_once ( 'php/common.php' ) ;
 include_once ( 'php/wikiquery.php' ) ;
-
-$x = new WikiQuery ( "en" , "wikipedia" ) ;
+require_once ( 'php/ToolforgeCommon.php' ) ;
+$tfc = new ToolforgeCommon('catfood') ;
 
 $test = isset ( $_REQUEST['test'] ) ;
 
@@ -191,52 +191,18 @@ $images = Array () ;
 $pages = Array () ;
 
 if ( $motd != "" ) { // Medium of the Day
-/*
-  $today = time () ;
-  $wq = new WikiQuery ( 'commons' , 'wikimedia' ) ;
-  
-	$ctx = stream_context_create(array('http' => array('timeout' => 5)));
-
-  for ( $i = 0 ; $i < $last ; $i++ ) {
-    $title = "Template:Motd/" . date ( "Y-m-j" , $today - 3600*24*$i ) ;
-    $title_desc = "Template:Motd/" . date ( "Y-m-j" , $today - 3600*24*$i ) . " (en)";
-    $url = $wq->get_article_url ( $title , 'raw' ) ;
-    $file = file_get_contents ( $url , 0 , $ctx ) ;
-	$file = explode ( '|' , $file ) ;
-	$file = explode ( '=' , $file[1] , 2 ) ;
-	$file = array_pop ( $file ) ;
-
-	$desc = "" ;
-	$url = $wq->get_article_url ( $title_desc , 'raw' ) ;
-	$desc = @file_get_contents ( $url , 0 , $ctx ) ;
-	$desc = preg_replace ( '/^.+?1=/' , '' , $desc ) ;
-	$desc = preg_replace ( '/\|2=.*$/' , '' , $desc ) ;
-
-    make_db_safe ( $file ) ;
-    $sql = "SELECT * FROM page,image WHERE img_name='" . $db->real_escape_string($file) . "' AND img_name=page_title AND page_namespace=$namespace" ;
-	if(!$result = $db->query($sql)) {} // TODO error handling
-	while($o = $result->fetch_object()){
-      $images[$o->img_timestamp] = $o ;
-      $images[$o->img_timestamp]->desc = $desc ;
-      $pages[] = $o->page_id ;
-      if ( $firstcat == "" ) $firstcat = $o->img_timestamp ;
-    }
-  }
-*/
 
 } else if ( $namespace != 6 ) {
 
   	if ( $depth == 0 ) $cats = '"'.$cat2.'"' ;
   	else {
   		$cats = array() ;
-  		findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ; // FIXME!!!
+  		$tfc->findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ; // FIXME!!!
 //		$cats = db_get_articles_in_category ( $language , $cat2 , $depth-1 , 14 ) ;
 		$cats = '"' . implode ( '","' , $cats ) . '"' ;
 	}
 
-	$sql = "SELECT * FROM page,categorylinks,revision WHERE page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
-//	$res = mysql_db_query ( $db , $sql , $mysql_con ) ;
-//	while ( $o = mysql_fetch_object ( $res ) ) {
+	$sql = "SELECT * FROM page,categorylinks,revision_compat WHERE page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
 	if(!$result = $db->query($sql)) {} // TODO error handling
 	while($o = $result->fetch_object()){
 		$thets = expand_ts ( $o->rev_timestamp ) ;
@@ -257,7 +223,7 @@ if ( $motd != "" ) { // Medium of the Day
 	if ( $category != "" ) { // Get last X images that were uploaded in that category
 		if ( $depth == 0 ) $cats = '"'.$cat2.'"' ;
 		else {
-			findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ;
+			$tfc->findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ;
 			$cats = '"' . implode ( '","' , $cats ) . '"' ;
 		}
 		$sql = "SELECT * FROM page,categorylinks,image WHERE page_id=cl_from AND img_name=page_title AND cl_to IN ($cats ) ORDER BY cl_timestamp DESC LIMIT {$last}" ;
