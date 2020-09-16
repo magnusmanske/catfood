@@ -11,7 +11,20 @@
 error_reporting(E_ERROR|E_CORE_ERROR|E_ALL|E_COMPILE_ERROR);
 ini_set('display_errors', 'On');
 
-include ( 'php/common.php' ) ;
+require_once ( "php/ToolforgeCommon.php" ) ;
+$tfc = new ToolforgeCommon('catfood') ;
+
+function get_image_url ( $lang , $image , $project = "wikipedia" ) {
+  global $tfc ;
+  $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
+  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
+}
+
+function get_thumbnail_url ( $lang , $image , $width , $project = "wikipedia" ) {
+  global $tfc ;
+  $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
+  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
+}
 
 function xml_safe ( $s ) {
 	$doc = new DOMDocument();
@@ -23,18 +36,18 @@ function xml_safe ( $s ) {
 
 $depth = 0 ; // Untested
 $thumb_width = 75 ;
-$max_images = get_request ( 'max_images' , 100 ) ;
-$category = get_request ( 'category' , '' ) ; //'Varanus komodoensis' ;
+$max_images = $tfc->getRequest ( 'max_images' , 100 ) ;
+$category = $tfc->getRequest ( 'category' , '' ) ; //'Varanus komodoensis' ;
 
 if ( $category == '' ) {
-	print get_common_header ( '' , 'Commons image feed' ) ;
+	print $tfc->getCommonHeader ( 'Commons image feed' ) ;
 	print "<div>Generates RSS feeds for screensavers from Wikimedia Commons categories (<a href='./commons_image_feed.php?category=Varanus%20komodoensis'>example</a>).</div>" ;
 	print "<form method='get' class='form-inline' action='?'><table class='table table-condensed'><tbody>" ;
 	print "<tr><th>Category</th><td><input name='category' type='text' value='$category' /></td><td/></tr>" ;
 	print "<tr><th nowrap>Max images</th><td><input name='max_images' type='text' value='$max_images' /></td><td><small>(image order is randomized, so you always get new images from a large category even with a relatively low number)</small></td></tr>" ;
 	print "<tr><td/><td><input type='submit' class='btn btn-primary' value='Gimme RSS!' /></td><td/></tr>" ;
 	print "</tbody></table></form>" ;
-	print get_common_footer() ;
+	print $tfc->getCommonFooter() ;
 	exit ( 0 ) ;
 }
 
@@ -51,30 +64,28 @@ header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
 print "<rss xmlns:media='http://search.yahoo.com/mrss/' xmlns:dc='http://purl.org/dc/elements/1.1/' xmlns:creativeCommons='http://cyber.law.harvard.edu/rss/creativeCommonsRssModule.html' version='1.0'>
 <channel>
 <title>Category \"" . xml_safe($category) . "\" on Wikimedia Commons</title>
-<link>http://commons.wikimedia.org/wiki/Category:" . myurlencode($category) . "</link>
+<link>http://commons.wikimedia.org/wiki/Category:" . $tfc->urlEncode($category) . "</link>
 <description/>
 <pubDate>$now</pubDate>
 <lastBuildDate>$now</lastBuildDate>
 <generator>http://toolserver.org/~magnus/commons_image_feed.php</generator>
 " ;
 
-$db = openDB ( 'commons' , "wikimedia" ) ;
+$db = $tfc->openDB ( 'commons' , "wikimedia" ) ;
 
-$cat = $category ;
-
-make_db_safe ( $cat ) ;
+$cat = $db->real_escape_string ( $category ) ;
+$cat = str_replace ( " " , "_" , $cat ) ;
 if ( $depth == 0 ) $cat = '"'.$cat.'"' ;
 else {
-	$cat = db_get_articles_in_category ( 'commons' , $cat , $depth-1 , 14 ) ;
-	$cat = '"' . implode ( '","' , $cat ) . '"' ;
+	$cats = [] ;
+  	$tfc->findSubcats ( $db , [ $cat2 ]  , $cats , $depth ) ; // FIXME!!!	
+  	//$cat = db_get_articles_in_category ( 'commons' , $cat , $depth-1 , 14 ) ;
+	$cat = '"' . implode ( '","' , $cats ) . '"' ;
 }
 
 $max_images *= 1 ;
 $sql = "select image.* from image,page,categorylinks where page_title=img_name AND cl_from=page_id AND cl_to IN ($cat) AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
-//print "$sql\n" ;
-#$res = mysql_db_query ( $db , $sql , $mysql_con ) ;
-#while ( $o = mysql_fetch_object ( $res ) ) {
-if(!$result = $db->query($sql)) die('There was an error running the query [' . $db->error . ']');
+$result = $tfc->getSQL ( $db , $sql ) ;
 while($o = $result->fetch_object()){
 	$name = $o->img_name ;
 	$desc = $o->img_description ;
@@ -88,7 +99,7 @@ while($o = $result->fetch_object()){
 	$nice_title = preg_replace ( '/\.[a-z]+$/i' , '' , $nice_title ) ;
 	$nice_title = xml_safe ( $nice_title ) ;
 	
-	$page_url = "http://commons.wikimedia.org/wiki/File:" . myurlencode ( $name ) ;
+	$page_url = "http://commons.wikimedia.org/wiki/File:" . $tfc->urlEncode ( $name ) ;
 	$image_url = get_image_url ( 'commons' , $name , "wikimedia" ) ;
 	$thumb_url = get_thumbnail_url ( 'commons' , $name , $thumb_width , "wikimedia" ) ;
 	
@@ -114,5 +125,6 @@ while($o = $result->fetch_object()){
 print "</channel></rss>" ;
 myflush() ;
 
+$tfc->logToolUse('','commons image feed rss') ;
 
 ?>

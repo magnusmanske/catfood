@@ -1,22 +1,31 @@
 <?php
 
-//error_reporting(E_ERROR|E_CORE_ERROR|E_ALL|E_COMPILE_ERROR);
-//ini_set('display_errors', 'On');
+error_reporting(E_ERROR|E_CORE_ERROR|E_ALL|E_COMPILE_ERROR);
+ini_set('display_errors', 'On');
 
 set_time_limit ( 5*60 ) ; # 5min
-//$hide_header = 1 ;
-//$hide_doctype = 1 ;
-include_once ( 'php/common.php' ) ;
 include_once ( 'php/wikiquery.php' ) ;
 require_once ( 'php/ToolforgeCommon.php' ) ;
 $tfc = new ToolforgeCommon('catfood') ;
 
+function get_image_url ( $lang , $image , $project = "wikipedia" ) {
+  global $tfc ;
+  $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
+  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
+}
+
+function get_thumbnail_url ( $lang , $image , $width , $project = "wikipedia" ) {
+  global $tfc ;
+  $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
+  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
+}
+
 $test = isset ( $_REQUEST['test'] ) ;
 
-$language = get_request ( 'language' , 'commons' ) ;
-$project = get_request ( 'project' , 'wikimedia' ) ;
-$depth = floor ( get_request ( 'depth' , 0 ) ) ;
-$namespace = floor ( get_request ( 'namespace' , 6 ) ) ;
+$language = $tfc->getRequest ( 'language' , 'commons' ) ;
+$project = $tfc->getRequest ( 'project' , 'wikimedia' ) ;
+$depth = floor ( $tfc->getRequest ( 'depth' , 0 ) ) ;
+$namespace = floor ( $tfc->getRequest ( 'namespace' , 6 ) ) ;
 
 $tsf = "D, d M Y H:i:s " ;
 $tstz = "GMT" ;
@@ -26,7 +35,6 @@ function escape4xml ( $text ) {
 	$fragment = $doc->createDocumentFragment();
 	$fragment->appendChild($doc->createTextNode($text));
 	return $doc->saveXML($fragment);
-//	return urlencode ( $text ) ;
 }
 
 function print_before_items () {
@@ -107,7 +115,7 @@ function get_thumb_url ( &$c , $size ) {
 }
 
 function get_licenses ( $arr ) {
-  $ret = Array () ;
+  $ret = [] ;
   foreach ( $arr AS $c ) {
     $c = ucfirst ( $c ) ;
     if ( substr ( $c , 0 , 2 ) == "PD" ) $c = "Public domain" ;
@@ -131,17 +139,13 @@ function expand_ts ( $timestamp ) {
 }
 
 
+$db = $tfc->openDB ( $language , "wikipedia" ) ;
 
-
-
-$db = openDB ( $language , "wikipedia" ) ;
-
-
-$motd = get_request ( "motd" , "" ) ;
-$category = trim ( str_replace ( "_" , " " , get_request ( "category" , "" ) ) ) ;
-$user = trim ( str_replace ( "_" , " " , get_request ( "user" , "" ) ) ) ;
-$size = get_request ( "size" , "300" ) ;
-$last = get_request ( "last" , ( $motd == "" ) ? "10" : "5" ) ;
+$motd = $tfc->getRequest ( "motd" , "" ) ;
+$category = trim ( str_replace ( "_" , " " , $tfc->getRequest ( "category" , "" ) ) ) ;
+$user = trim ( str_replace ( "_" , " " , $tfc->getRequest ( "user" , "" ) ) ) ;
+$size = $tfc->getRequest ( "size" , "300" ) ;
+$last = $tfc->getRequest ( "last" , ( $motd == "" ) ? "10" : "5" ) ;
 if ( $last < 1 ) $last = 1 ;
 if ( $last > 100 ) $last = 100 ;
 
@@ -149,7 +153,7 @@ if ( $motd . $user . $category == "" || false === $db ) {
   $mytitle = ucfirst ( $project ) . " " . ucfirst ( $language ) ;
   header('Content-type: text/html; charset=utf-8');
   print '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">' . "\n\n" ;
-  print get_common_header ( "catfood.php" , "CatFood (Category news feeder)" ) ;
+  print $tfc->getCommonHeader ( "CatFood (Category news feeder)" ) ;
   print "This is a category-based RSS feed for <a href='http://$language.$project.org'>$mytitle</a>.<br/>
 The images are ordered based on the time of the addition of the image to the category, latest additions first.<br/>
 Alternatively, you can see the last images uploaded by a user.<br/>
@@ -173,7 +177,7 @@ Enter the information below, or use URL parameters (click on \"Do it!\" for a de
 <tr><td/><td><input type='submit' name='doit' value='Do it' class='btn btn-primary' /></td><td></td></tr>
 </table>
 </form>
-Or get a feed of the <a href=\"http://tools.wmflabs.org/catfood/catfood.php?motd=1\">Media file of the Day</a>!
+Or get a feed of the <a href=\"http://catfood.toolforge.org/catfood.php?motd=1\">Media file of the Day</a>!
 </div></div></body></html>" ;
   exit ;
 }
@@ -181,14 +185,15 @@ Or get a feed of the <a href=\"http://tools.wmflabs.org/catfood/catfood.php?motd
 
 
 
-$cat2 = get_db_safe ( $category ) ;
+$cat2 = $db->real_escape_string ( $category ) ;
+$cat2 = str_replace ( " " , "_" , $cat2 ) ;
 
 $user2 = $db->real_escape_string ( $user ) ;
 $user2 = str_replace ( "_" , " " , $user2 ) ;
 
 $firstcat = "" ;
-$images = Array () ;
-$pages = Array () ;
+$images = [] ;
+$pages = [] ;
 
 if ( $motd != "" ) { // Medium of the Day
 
@@ -196,8 +201,8 @@ if ( $motd != "" ) { // Medium of the Day
 
   	if ( $depth == 0 ) $cats = '"'.$cat2.'"' ;
   	else {
-  		$cats = array() ;
-  		$tfc->findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ; // FIXME!!!
+  		$cats = [] ;
+  		$tfc->findSubcats ( $db , [ $cat2 ]  , $cats , $depth ) ; // FIXME!!!
 //		$cats = db_get_articles_in_category ( $language , $cat2 , $depth-1 , 14 ) ;
 		$cats = '"' . implode ( '","' , $cats ) . '"' ;
 	}
@@ -226,14 +231,12 @@ if ( $motd != "" ) { // Medium of the Day
 			$tfc->findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ;
 			$cats = '"' . implode ( '","' , $cats ) . '"' ;
 		}
-		$sql = "SELECT * FROM page,categorylinks,image WHERE page_id=cl_from AND img_name=page_title AND cl_to IN ($cats ) ORDER BY cl_timestamp DESC LIMIT {$last}" ;
+		$sql = "SELECT * FROM page,categorylinks,image_compat WHERE page_id=cl_from AND img_name=page_title AND cl_to IN ($cats ) ORDER BY cl_timestamp DESC LIMIT {$last}" ;
 	} else if ( $user != "" ) { // Get last X images that were uploaded by that user
-		$sql = "SELECT * FROM page,image WHERE img_user_text=\"{$user2}\" AND img_name=page_title AND page_namespace=$namespace ORDER BY img_timestamp DESC LIMIT {$last}" ;
+		$sql = "SELECT * FROM page,image_compat WHERE img_user_text=\"{$user2}\" AND img_name=page_title AND page_namespace=$namespace ORDER BY img_timestamp DESC LIMIT {$last}" ;
 	}
 
-	//  $res = mysql_db_query ( $db , $sql , $mysql_con ) ;
-	//  while ( $o = mysql_fetch_object ( $res ) ) {
-	if(!$result = $db->query($sql)) { die($db->error); } // TODO error handling
+  $result = $tfc->getSQL ( $db , $sql ) ;
 	while($o = $result->fetch_object()){
 		$thets = expand_ts ( $o->img_timestamp ) ;
 		if ( $category != '' and $o->cl_timestamp > $thets ) $thets =  $o->cl_timestamp ;
@@ -255,13 +258,13 @@ if ( count ( $images ) == 0 ) {
 header('Content-type: application/rss+xml; charset=utf-8');
 
 // Get licensing information
-$cats = Array () ;
+$cats = [] ;
 $sql = "SELECT * FROM categorylinks WHERE cl_from IN (" . implode ( "," , $pages ) . ")" ;
 //$res = mysql_db_query ( $db , $sql , $mysql_con ) ;
 //while ( $o = mysql_fetch_object ( $res ) ) {
 if(!$result = $db->query($sql)) {} // TODO error handling
 while($o = $result->fetch_object()){
-  if ( !isset ( $cats[$o->cl_from] ) ) $cats[$o->cl_from] = Array () ;
+  if ( !isset ( $cats[$o->cl_from] ) ) $cats[$o->cl_from] = [] ;
   $cats[$o->cl_from][] = $o->cl_to ;
 }
 
@@ -341,5 +344,8 @@ foreach ( $images AS $c ) {
 }
 
 print '</channel></rss>' ;
+
+$tfc->logToolUse('','rss') ;
+
 
 ?>
