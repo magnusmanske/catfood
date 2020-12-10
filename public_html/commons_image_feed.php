@@ -17,13 +17,13 @@ $tfc = new ToolforgeCommon('catfood') ;
 function get_image_url ( $lang , $image , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
+  return "https://".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
 }
 
 function get_thumbnail_url ( $lang , $image , $width , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
+  return "https://".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
 }
 
 function xml_safe ( $s ) {
@@ -64,11 +64,11 @@ header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
 print "<rss xmlns:media='http://search.yahoo.com/mrss/' xmlns:dc='http://purl.org/dc/elements/1.1/' xmlns:creativeCommons='http://cyber.law.harvard.edu/rss/creativeCommonsRssModule.html' version='1.0'>
 <channel>
 <title>Category \"" . xml_safe($category) . "\" on Wikimedia Commons</title>
-<link>http://commons.wikimedia.org/wiki/Category:" . $tfc->urlEncode($category) . "</link>
+<link>https://commons.wikimedia.org/wiki/Category:" . $tfc->urlEncode($category) . "</link>
 <description/>
 <pubDate>$now</pubDate>
 <lastBuildDate>$now</lastBuildDate>
-<generator>http://toolserver.org/~magnus/commons_image_feed.php</generator>
+<generator>https://catfood.toolforge.org/commons_image_feed.php</generator>
 " ;
 
 $db = $tfc->openDB ( 'commons' , "wikimedia" ) ;
@@ -99,7 +99,7 @@ while($o = $result->fetch_object()){
 	$nice_title = preg_replace ( '/\.[a-z]+$/i' , '' , $nice_title ) ;
 	$nice_title = xml_safe ( $nice_title ) ;
 	
-	$page_url = "http://commons.wikimedia.org/wiki/File:" . $tfc->urlEncode ( $name ) ;
+	$page_url = "https://commons.wikimedia.org/wiki/File:" . $tfc->urlEncode ( $name ) ;
 	$image_url = get_image_url ( 'commons' , $name , "wikimedia" ) ;
 	$thumb_url = get_thumbnail_url ( 'commons' , $name , $thumb_width , "wikimedia" ) ;
 	
