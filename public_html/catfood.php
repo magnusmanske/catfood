@@ -11,13 +11,13 @@ $tfc = new ToolforgeCommon('catfood') ;
 function get_image_url ( $lang , $image , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
+  return "https://".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
 }
 
 function get_thumbnail_url ( $lang , $image , $width , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
+  return "https://".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
 }
 
 $test = isset ( $_REQUEST['test'] ) ;
@@ -64,7 +64,7 @@ function print_before_items () {
   if ( $info == "" && $motd != "" ) $info = "Media file of the Day" ;
 
   print "<title>$info $d- $language.$project.org</title>
-  <link>http://tools.wmflabs.org/catfood/catfood.php</link>" ;
+  <link>https://catfood.toolforge.org/catfood.php</link>" ;
   
   if ( $category != "" )
     print "<description>Category feed for category \"$category\" from $language.$project.org</description>" ;
@@ -77,17 +77,17 @@ function print_before_items () {
   print "<pubDate>{$ts}</pubDate><lastBuildDate>{$ts}</lastBuildDate>" ;
 
   print "<generator>CatFood</generator>
-  <docs>http://tools.wmflabs.org/catfood/catfood.php</docs>
+  <docs>https://catfood.toolforge.org/catfood.php</docs>
 
   <image>
     <url>" ;
     
-    if ( $language == 'commons' ) print "http://upload.wikimedia.org/wikipedia/commons/7/79/Wiki-commons.png" ;
+    if ( $language == 'commons' ) print "https://upload.wikimedia.org/wikipedia/commons/7/79/Wiki-commons.png" ;
     else print get_thumbnail_url ( "commons" , "Wikipedia-logo-$language.png" , 135 , "wikimedia" ) ;
     
     print "</url>
     <title>$info $d- $language.$project.org</title>
-    <link>http://tools.wmflabs.org/catfood/catfood.php</link>
+    <link>https://catfood.toolforge.org/catfood.php</link>
   </image>
   " ;
 }
@@ -98,7 +98,7 @@ function get_thumb_url ( &$c , $size ) {
     if ( $c->img_media_type == "AUDIO" ) {
       if ( $size < 200 ) $s = $size ;
       else $s = 200 ;
-      return "http://upload.wikimedia.org/wikipedia/commons/thumb/4/47/Sound-icon.svg/{$s}px-Sound-icon.svg.png" ;
+      return "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/Sound-icon.svg/{$s}px-Sound-icon.svg.png" ;
     }
   } else if ( $c->img_width < $size && $c->img_height < $size ) { # Image smaller than max px, return direct URL (no thumbnail)
     return get_image_url ( $language , $c->img_name , $project ) ;
@@ -126,7 +126,7 @@ function get_licenses ( $arr ) {
     else continue ;
     
     $c2 = str_replace ( " " , "_" , $c ) ;
-    $ret[$c2] = "<a href=\"http://en.wikipedia.org/wiki/$c2\">$c</a>" ;
+    $ret[$c2] = "<a href=\"https://en.wikipedia.org/wiki/$c2\">$c</a>" ;
   }
   
   $ret = implode ( "," , $ret ) ;
@@ -154,7 +154,7 @@ if ( $motd . $user . $category == "" || false === $db ) {
   header('Content-type: text/html; charset=utf-8');
   print '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">' . "\n\n" ;
   print $tfc->getCommonHeader ( "CatFood (Category news feeder)" ) ;
-  print "This is a category-based RSS feed for <a href='http://$language.$project.org'>$mytitle</a>.<br/>
+  print "This is a category-based RSS feed for <a href='https://$language.$project.org'>$mytitle</a>.<br/>
 The images are ordered based on the time of the addition of the image to the category, latest additions first.<br/>
 Alternatively, you can see the last images uploaded by a user.<br/>
 You need to supply at least a category or a user name to get a feed.<br/>
@@ -177,7 +177,7 @@ Enter the information below, or use URL parameters (click on \"Do it!\" for a de
 <tr><td/><td><input type='submit' name='doit' value='Do it' class='btn btn-primary' /></td><td></td></tr>
 </table>
 </form>
-Or get a feed of the <a href=\"http://catfood.toolforge.org/catfood.php?motd=1\">Media file of the Day</a>!
+Or get a feed of the <a href=\"https://catfood.toolforge.org/catfood.php?motd=1\">Media file of the Day</a>!
 </div></div></body></html>" ;
   exit ;
 }
@@ -287,7 +287,7 @@ foreach ( $images AS $c ) {
   
   $nicesize = number_format ( $c->img_size , 0 , "" , "." ) ;
   
-  $descurl = "http://$language.$project.org/wiki/" ;
+  $descurl = "https://$language.$project.org/wiki/" ;
   if ( $namespace == 6 ) $descurl .= "File:" ;
   $descurl .= urlencode ( $c->img_name ) ;
   $guid = $descurl ;
@@ -305,7 +305,7 @@ foreach ( $images AS $c ) {
   if ( $namespace == 6 ) $desc .= "Uploaded" ;
   else $desc .= "Edited" ;
   
-  $desc .= " by user \"<a href=\"http://$language.$project.org/wiki/User:{$c->img_user_text}\">{$c->img_user_text}</a>\" on {$timestamp}<br/>\n" ;
+  $desc .= " by user \"<a href=\"https://$language.$project.org/wiki/User:{$c->img_user_text}\">{$c->img_user_text}</a>\" on {$timestamp}<br/>\n" ;
   
   if ( $namespace != 6 ) {
   	$desc .= "\"<i>" . htmlspecialchars ( $c->rev_comment ) . "</i>\"<br/>" ;
