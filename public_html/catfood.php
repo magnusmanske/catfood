@@ -154,19 +154,19 @@ if ( $motd . $user . $category == "" || false === $db ) {
   header('Content-type: text/html; charset=utf-8');
   print '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">' . "\n\n" ;
   print $tfc->getCommonHeader ( "CatFood (Category news feeder)" ) ;
-  print "This is a category-based RSS feed for <a href='http://$language.$project.org'>$mytitle</a>.<br/>
+  print "This is a category-based RSS feed for <a href='http://".htmlspecialchars($language).".".htmlspecialchars($project).".org'>".htmlspecialchars($mytitle)."</a>.<br/>
 The images are ordered based on the time of the addition of the image to the category, latest additions first.<br/>
 Alternatively, you can see the last images uploaded by a user.<br/>
 You need to supply at least a category or a user name to get a feed.<br/>
 Enter the information below, or use URL parameters (click on \"Do it!\" for a demo).
 <form method='get'>
 <table class='table table-condensed'>
-<tr><th>Language</th><td><input type='text' name='language' value='$language' /></td><td>e.g., \"en\" or \"commons\"</td></tr>
-<tr><th>Project</th><td><input type='text' name='project' value='$project' /></td><td>e.g. \"wikipedia\"</td></tr>
+<tr><th>Language</th><td><input type='text' name='language' value='".htmlspecialchars($language)."' /></td><td>e.g., \"en\" or \"commons\"</td></tr>
+<tr><th>Project</th><td><input type='text' name='project' value='".htmlspecialchars($project)."' /></td><td>e.g. \"wikipedia\"</td></tr>
 <tr><th>Category</th><td><input type='text' name='category' value='Featured pictures on Wikimedia Commons' class='span4' /></td><td>without the \"Category:\" prefix</td></tr>
-<tr><th>Depth</th><td><input type='number' name='depth' value='$depth' /></td><td>0=just this category</td></tr>
-<tr><th>Namespace</th><td><input type='number' name='namespace' value='$namespace' /></td><td>6=images; 0=article</td></tr>
-<tr><th>User</th><td><input type='text' name='user' value='' /></td><td>$mytitle user name, <i>instead</i> of category</td></tr>
+<tr><th>Depth</th><td><input type='number' name='depth' value='".htmlspecialchars($depth)."' /></td><td>0=just this category</td></tr>
+<tr><th>Namespace</th><td><input type='number' name='namespace' value='".htmlspecialchars($namespace)."' /></td><td>6=images; 0=article</td></tr>
+<tr><th>User</th><td><input type='text' name='user' value='' /></td><td>".htmlspecialchars($mytitle)." user name, <i>instead</i> of category</td></tr>
 <tr><th>Size</th><td>
 <label class='radio inline'><input type='radio' name='size' value='200' id='size200' />200px</label>
 <label class='radio inline'><input type='radio' name='size' value='250' id='size250' />250px</label>
@@ -207,9 +207,14 @@ if ( $motd != "" ) { // Medium of the Day
 		$cats = '"' . implode ( '","' , $cats ) . '"' ;
 	}
 
-	$sql = "SELECT * FROM page,categorylinks,revision_compat WHERE page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
-	if(!$result = $db->query($sql)) {} // TODO error handling
-	while($o = $result->fetch_object()){
+    if ( $tfc->use_new_categorylinks ) {
+      $sql = "SELECT page.*,categorylinks.*,revision_compat.*,lt_title AS cl_to FROM page,categorylinks,linktarget,revision_compat WHERE cl_target_id=lt_id AND lt_namespace=14 AND page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
+    } else {
+      $sql = "SELECT * FROM page,categorylinks,revision_compat WHERE page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
+
+    }
+    $result = $tfc->getSQL($db,$sql);
+    while($o = $result->fetch_object()){
 		$thets = expand_ts ( $o->rev_timestamp ) ;
 		
 		$o->thets = $thets ;
@@ -231,12 +236,18 @@ if ( $motd != "" ) { // Medium of the Day
 			$tfc->findSubcats ( $db , array ( $cat2 )  , $cats , $depth ) ;
 			$cats = '"' . implode ( '","' , $cats ) . '"' ;
 		}
-		$sql = "SELECT * FROM page,categorylinks,image_compat WHERE page_id=cl_from AND img_name=page_title AND cl_to IN ($cats ) ORDER BY cl_timestamp DESC LIMIT {$last}" ;
+
+    if ( $tfc->use_new_categorylinks ) {
+      $sql = "SELECT page.*,image_compat.*,categorylinks.*,lt_title AS cl_to FROM page,image_compat,categorylinks,linktarget WHERE cl_target_id=lt_id AND lt_namespace=14 AND page_id=cl_from AND img_name=page_title AND cl_to IN ($cats ) ORDER BY cl_timestamp DESC LIMIT {$last}" ;
+    } else {
+      $sql = "SELECT * FROM page,categorylinks,image_compat WHERE page_id=cl_from AND img_name=page_title AND cl_to IN ($cats ) ORDER BY cl_timestamp DESC LIMIT {$last}" ;
+    }
+    
 	} else if ( $user != "" ) { // Get last X images that were uploaded by that user
 		$sql = "SELECT * FROM page,image_compat WHERE img_user_text=\"{$user2}\" AND img_name=page_title AND page_namespace=$namespace ORDER BY img_timestamp DESC LIMIT {$last}" ;
 	}
 
-  $result = $tfc->getSQL ( $db , $sql ) ;
+  $result = $tfc->getSQL($db,$sql);
 	while($o = $result->fetch_object()){
 		$thets = expand_ts ( $o->img_timestamp ) ;
 		if ( $category != '' and $o->cl_timestamp > $thets ) $thets =  $o->cl_timestamp ;
@@ -259,10 +270,12 @@ header('Content-type: application/rss+xml; charset=utf-8');
 
 // Get licensing information
 $cats = [] ;
-$sql = "SELECT * FROM categorylinks WHERE cl_from IN (" . implode ( "," , $pages ) . ")" ;
-//$res = mysql_db_query ( $db , $sql , $mysql_con ) ;
-//while ( $o = mysql_fetch_object ( $res ) ) {
-if(!$result = $db->query($sql)) {} // TODO error handling
+if ( $tfc->use_new_categorylinks ) {
+  $sql = "SELECT categorylinks.*,lt_title AS cl_to FROM categorylinks,linktarget WHERE cl_target_id=lt_id AND lt_namespace=14 AND cl_from IN (" . implode ( "," , $pages ) . ")" ;
+} else {
+  $sql = "SELECT * FROM categorylinks WHERE cl_from IN (" . implode ( "," , $pages ) . ")" ;
+}
+$result = $tfc->getSQL($db,$sql);
 while($o = $result->fetch_object()){
   if ( !isset ( $cats[$o->cl_from] ) ) $cats[$o->cl_from] = [] ;
   $cats[$o->cl_from][] = $o->cl_to ;

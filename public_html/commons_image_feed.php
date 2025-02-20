@@ -84,7 +84,11 @@ else {
 }
 
 $max_images *= 1 ;
-$sql = "select image.* from image,page,categorylinks where page_title=img_name AND cl_from=page_id AND cl_to IN ($cat) AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
+if ( $tfc->use_new_categorylinks ) {
+	$sql = "SELECT image.* from image,page,categorylinks,linktarget WHERE page_title=img_name AND cl_from=page_id AND cl_target_id=lt_id AND lt_namespace=14 AND lt_title IN ($cat) AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
+} else {
+	$sql = "select image.* from image,page,categorylinks where page_title=img_name AND cl_from=page_id AND cl_to IN ($cat) AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
+}
 $result = $tfc->getSQL ( $db , $sql ) ;
 while($o = $result->fetch_object()){
 	$name = $o->img_name ;
