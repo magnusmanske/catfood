@@ -17,13 +17,13 @@ $tfc = new ToolforgeCommon('catfood') ;
 function get_image_url ( $lang , $image , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
+  return "//".$tfc->getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
 }
 
 function get_thumbnail_url ( $lang , $image , $width , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
+  return "//".$tfc->getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
 }
 
 function xml_safe ( $s ) {
