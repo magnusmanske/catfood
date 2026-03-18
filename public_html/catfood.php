@@ -11,13 +11,13 @@ $tfc = new ToolforgeCommon('catfood') ;
 function get_image_url ( $lang , $image , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".$tfc->getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
+  return "https://".$tfc->getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image);
 }
 
 function get_thumbnail_url ( $lang , $image , $width , $project = "wikipedia" ) {
   global $tfc ;
   $wiki = $tfc->getWikiForLanguageProject ( $lang , $project ) ;
-  return "//".$tfc->getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
+  return "https://".$tfc->getWebserverForWiki($wiki)."/wiki/Special:Redirect/file/".$tfc->urlEncode($image)."?width={$width}";
 }
 
 $test = isset ( $_REQUEST['test'] ) ;
@@ -53,7 +53,7 @@ function print_before_items () {
   $d = '' ;
   if ( $depth > 0 ) $d = "(depth $depth) " ;
 
-  $ownpath = '//'.$_SERVER["SERVER_NAME"].escape4xml($_SERVER['REQUEST_URI']) ;
+  $ownpath = 'https://'.$_SERVER["SERVER_NAME"].escape4xml($_SERVER['REQUEST_URI']) ;
   print '<?xml version="1.0" encoding="UTF-8"?>
   <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
