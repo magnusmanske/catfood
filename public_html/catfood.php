@@ -228,12 +228,11 @@ if ( $motd != "" ) { // Medium of the Day
 		$cats = '"' . implode ( '","' , $cats ) . '"' ;
 	}
 
-    if ( $tfc->use_new_categorylinks ) {
-      $sql = "SELECT page.*,categorylinks.*,revision_compat.*,lt_title AS cl_to FROM page,categorylinks,linktarget,revision_compat WHERE cl_target_id=lt_id AND lt_namespace=14 AND page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
-    } else {
-      $sql = "SELECT * FROM page,categorylinks,revision_compat WHERE page_id=cl_from AND cl_to IN ( $cats ) AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
-
-    }
+    $sql = "SELECT page.*,categorylinks.*,revision_compat.*
+	   	FROM page,categorylinks,linktarget,revision_compat
+	   	WHERE cl_target_id=lt_id AND lt_namespace=14 AND page_id=cl_from
+	   	AND lt_title IN ( $cats )
+	   	AND rev_id=page_latest AND rev_page=page_id AND page_namespace=$namespace ORDER BY rev_timestamp DESC LIMIT $last" ;
     $result = $tfc->getSQL($db,$sql);
     while($o = $result->fetch_object()){
 		$thets = expand_ts ( $o->rev_timestamp ) ;
@@ -259,27 +258,16 @@ if ( $motd != "" ) { // Medium of the Day
 		}
 
 
-    if ( $tfc->use_new_categorylinks ) {
-      $sql = "SELECT page.*,{$image_query},categorylinks.*,lt_title AS cl_to
+      $sql = "SELECT page.*,{$image_query},categorylinks.*
       	FROM page,{$image_table},categorylinks,linktarget
 		WHERE cl_target_id=lt_id
 		AND lt_namespace=14 AND
 		page_id=cl_from AND
 		{$img_name}=page_title
-		AND cl_to IN ($cats )
+		AND lt_title IN ($cats )
 		{$image_where}
 		ORDER BY cl_timestamp DESC
 		LIMIT {$last}" ;
-    } else {
-      $sql = "SELECT page.*,categorylinks.*,{$image_query}
-      	FROM page,categorylinks,{$image_table}
-		WHERE page_id=cl_from
-		AND {$img_name}=page_title
-		AND cl_to IN ($cats )
-		{$image_where}
-		ORDER BY cl_timestamp DESC
-		LIMIT {$last}" ;
-    }
 
 	} else if ( $user != "" ) { // Get last X images that were uploaded by that user
 		$sql = "SELECT {$image_query} FROM page,{$image_table}
@@ -314,15 +302,13 @@ header('Content-type: application/rss+xml; charset=utf-8');
 
 // Get licensing information
 $cats = [] ;
-if ( $tfc->use_new_categorylinks ) {
-  $sql = "SELECT categorylinks.*,lt_title AS cl_to FROM categorylinks,linktarget WHERE cl_target_id=lt_id AND lt_namespace=14 AND cl_from IN (" . implode ( "," , $pages ) . ")" ;
-} else {
-  $sql = "SELECT * FROM categorylinks WHERE cl_from IN (" . implode ( "," , $pages ) . ")" ;
-}
+$sql = "SELECT categorylinks.*,lt_title
+	FROM categorylinks,linktarget
+	WHERE cl_target_id=lt_id AND lt_namespace=14 AND cl_from IN (" . implode ( "," , $pages ) . ")" ;
 $result = $tfc->getSQL($db,$sql);
 while($o = $result->fetch_object()){
   if ( !isset ( $cats[$o->cl_from] ) ) $cats[$o->cl_from] = [] ;
-  $cats[$o->cl_from][] = $o->cl_to ;
+  $cats[$o->cl_from][] = $o->lt_title ;
 }
 
 

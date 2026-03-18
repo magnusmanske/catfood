@@ -78,17 +78,15 @@ $cat = str_replace ( " " , "_" , $cat ) ;
 if ( $depth == 0 ) $cat = '"'.$cat.'"' ;
 else {
 	$cats = [] ;
-  	$tfc->findSubcats ( $db , [ $cat2 ]  , $cats , $depth ) ; // FIXME!!!	
+  	$tfc->findSubcats ( $db , [ $cat2 ]  , $cats , $depth ) ; // FIXME!!!
   	//$cat = db_get_articles_in_category ( 'commons' , $cat , $depth-1 , 14 ) ;
 	$cat = '"' . implode ( '","' , $cats ) . '"' ;
 }
 
 $max_images *= 1 ;
-if ( $tfc->use_new_categorylinks ) {
-	$sql = "SELECT image.* from image,page,categorylinks,linktarget WHERE page_title=img_name AND cl_from=page_id AND cl_target_id=lt_id AND lt_namespace=14 AND lt_title IN ($cat) AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
-} else {
-	$sql = "select image.* from image,page,categorylinks where page_title=img_name AND cl_from=page_id AND cl_to IN ($cat) AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
-}
+$sql = "SELECT image.* from image,page,categorylinks,linktarget
+	WHERE page_title=img_name AND cl_from=page_id AND cl_target_id=lt_id AND lt_namespace=14 AND lt_title IN ($cat)
+	AND cl_type='file' AND img_media_type='BITMAP' ORDER BY rand() LIMIT $max_images" ;
 $result = $tfc->getSQL ( $db , $sql ) ;
 while($o = $result->fetch_object()){
 	$name = $o->img_name ;
@@ -98,15 +96,15 @@ while($o = $result->fetch_object()){
 	$type = $o->img_minor_mime ;
 	$img_width = $o->img_width ;
 	$img_height = $o->img_height ;
-	
+
 	$nice_title = str_replace ( '_' , ' ' , $name ) ;
 	$nice_title = preg_replace ( '/\.[a-z]+$/i' , '' , $nice_title ) ;
 	$nice_title = xml_safe ( $nice_title ) ;
-	
+
 	$page_url = "http://commons.wikimedia.org/wiki/File:" . $tfc->urlEncode ( $name ) ;
 	$image_url = get_image_url ( 'commons' , $name , "wikimedia" ) ;
 	$thumb_url = get_thumbnail_url ( 'commons' , $name , $thumb_width , "wikimedia" ) ;
-	
+
 	print "<item>" ;
 	print "<title>$nice_title</title>" ;
 	print "<link>$page_url</link>" ;
