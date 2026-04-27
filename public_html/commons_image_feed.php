@@ -57,6 +57,7 @@ $now = date('r') ;
 
 //header('Content-type: text/plain; charset=utf-8');
 header('Content-type: text/xml; charset=utf-8');
+ini_set('display_errors', 'Off');
 header("Cache-Control: no-cache, must-revalidate"); // HTTP/1.1
 header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
 

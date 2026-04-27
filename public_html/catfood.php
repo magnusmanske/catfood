@@ -299,6 +299,7 @@ if ( count ( $images ) == 0 ) {
 }
 
 header('Content-type: application/rss+xml; charset=utf-8');
+ini_set('display_errors', 'Off');
 
 // Get licensing information
 $cats = [] ;
