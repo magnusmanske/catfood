@@ -145,7 +145,7 @@ $motd = $tfc->getRequest ( "motd" , "" ) ;
 $category = trim ( str_replace ( "_" , " " , $tfc->getRequest ( "category" , "" ) ) ) ;
 $user = trim ( str_replace ( "_" , " " , $tfc->getRequest ( "user" , "" ) ) ) ;
 $size = $tfc->getRequest ( "size" , "300" ) ;
-$last = $tfc->getRequest ( "last" , ( $motd == "" ) ? "10" : "5" ) ;
+$last = (int) $tfc->getRequest ( "last" , ( $motd == "" ) ? "10" : "5" ) ;
 if ( $last < 1 ) $last = 1 ;
 if ( $last > 100 ) $last = 100 ;
 
