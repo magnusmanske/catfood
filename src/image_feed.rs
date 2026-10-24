@@ -80,7 +80,7 @@ impl fmt::Display for ImageFeed<'_> {
 <description/>
 <pubDate>{now}</pubDate>
 <lastBuildDate>{now}</lastBuildDate>
-<generator>https://catfood.toolforge.org/commons_image_feed.php</generator>
+<generator>https://catfood.toolforge.org/commons_image_feed</generator>
 "#,
             xml(self.category),
             xml(&title::page_url(

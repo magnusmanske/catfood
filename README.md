@@ -5,11 +5,13 @@ user's latest uploads: <https://catfood.toolforge.org>
 
 | Path | Feed |
 |------|------|
-| `/` (also `/catfood.php`, `/index.php`) | `category` (with `depth`, `namespace`) or `user`, on any wiki (`language`, `project`); `size`, `last` |
-| `/commons_image_feed.php` | Random images from a Commons `category`, for screensavers; `max_images` |
-| `/healthz` | Liveness check |
+| `/catfood` (also `/`) | `category` (with `depth`, `namespace`) or `user`, on any wiki (`language`, `project`); `size`, `last` |
+| `/commons_image_feed` | Random images from a Commons `category`, for screensavers; `max_images` |
+| `/healthz` | `OK` if a database connection is available, else 503 |
 
-Without parameters, each feed shows a form.
+Without parameters, each feed shows a form. The PHP version's paths
+(`/catfood.php`, `/index.php`, `/commons_image_feed.php`) redirect permanently
+(301) to these, keeping the query string.
 
 ## Development
 

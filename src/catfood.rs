@@ -6,6 +6,7 @@ use crate::db::{FileInfo, MemberOrder, WikiDb};
 use crate::error::AppError;
 use crate::html;
 use crate::params::Params;
+use crate::routes::BASE_URL;
 use crate::rss::{self, XmlText, php_urlencode};
 use crate::timestamp::Timestamp;
 use crate::wiki::{self, Wiki};
@@ -18,7 +19,7 @@ use wikimisc::commons;
 use wikimisc::escape::{html as escape_html, xml};
 use wikimisc::title::{self, Case};
 
-const TOOL_URL: &str = "https://catfood.toolforge.org/catfood.php";
+const TOOL_URL: &str = "https://catfood.toolforge.org/catfood";
 /// Commons' own feed, which replaces the never implemented `motd` mode
 const MOTD_FEED: &str = "https://commons.wikimedia.org/w/api.php?action=featuredfeed&feed=motd&feedformat=rss&language=en";
 const FILE_NAMESPACE: i64 = 6;
@@ -66,7 +67,7 @@ pub async fn feed(
         items: &items,
         size: u32::try_from(size.clamp(20, 2000)).unwrap_or(DEFAULT_SIZE),
         self_url: &format!(
-            "https://catfood.toolforge.org{}",
+            "{BASE_URL}{}",
             uri.path_and_query().map_or("/", |pq| pq.as_str())
         ),
         legacy_host: &format!(
