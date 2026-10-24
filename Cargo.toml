@@ -1,0 +1,39 @@
+[package]
+name = "catfood"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "RSS feeds of the latest files and pages in Wikimedia categories"
+license = "GPL-2.0-or-later"
+publish = false
+
+[dependencies]
+axum = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["alloc", "now"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tracing = "0.1"
+wikimisc = { version = "0.3", default-features = false, features = [
+    "database",
+    "escape",
+    "logging",
+    "server",
+    "title",
+] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
