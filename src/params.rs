@@ -1,23 +1,53 @@
-//! Query parameter parsing shared by the handlers.
+//! Query parameters, parsed as leniently as PHP did, so old feed URLs keep
+//! working.
 
-use serde::{Deserialize, Deserializer};
-use std::str::FromStr;
+use std::collections::HashMap;
 
-/// Deserializes a number leniently: empty or malformed values become `None`,
-/// so the caller's default applies, instead of failing the whole request.
-pub fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: FromStr,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.and_then(|s| s.trim().parse().ok()))
+/// The query string; for repeated keys, the last value wins
+#[derive(Debug, Default)]
+pub struct Params(HashMap<String, String>);
+
+impl Params {
+    pub fn new(map: HashMap<String, String>) -> Self {
+        Self(map)
+    }
+
+    /// The trimmed value, or `default` if missing or blank
+    pub fn text<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
+        match self.0.get(key).map(|value| value.trim()) {
+            None | Some("") => default,
+            Some(value) => value,
+        }
+    }
+
+    /// The value exactly as given, or `default` if missing, as PHP's
+    /// `getRequest` returned it
+    pub fn raw<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
+        self.0.get(key).map_or(default, String::as_str)
+    }
+
+    /// `None` if missing; otherwise the number the value starts with, like
+    /// PHP's `(int)` cast: `"12abc"` and `"12.9"` are 12, garbage is 0, and
+    /// huge numbers saturate
+    pub fn int(&self, key: &str) -> Option<i64> {
+        self.0.get(key).map(|value| leading_int(value))
+    }
 }
 
-/// `value`, or `default` if it is blank
-pub fn non_empty<'a>(value: &'a str, default: &'a str) -> &'a str {
-    match value.trim() {
-        "" => default,
-        trimmed => trimmed,
+fn leading_int(s: &str) -> i64 {
+    let s = s.trim_start();
+    let (negative, unsigned) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let digits = unsigned.bytes().take_while(u8::is_ascii_digit).count();
+    let magnitude = unsigned.get(..digits).and_then(|d| d.parse::<i64>().ok());
+    match (magnitude, negative) {
+        _ if digits == 0 => 0,
+        (Some(n), true) => -n,
+        (Some(n), false) => n,
+        (None, true) => i64::MIN,
+        (None, false) => i64::MAX,
     }
 }
 
@@ -27,31 +57,38 @@ mod tests {
     use axum::extract::Query;
     use axum::http::Uri;
 
-    #[derive(Debug, Default, Deserialize)]
-    #[serde(default)]
-    struct Params {
-        #[serde(deserialize_with = "lenient")]
-        n: Option<u32>,
-    }
-
-    fn parse(query: &str) -> Option<u32> {
+    fn parse(query: &str) -> Params {
         let uri: Uri = format!("/?{query}").parse().unwrap();
-        Query::<Params>::try_from_uri(&uri).unwrap().0.n
+        Params::new(Query::try_from_uri(&uri).unwrap().0)
     }
 
     #[test]
-    fn lenient_numbers() {
-        assert_eq!(parse("n=5"), Some(5));
-        assert_eq!(parse("n=+5"), Some(5));
-        assert_eq!(parse("n="), None);
-        assert_eq!(parse("n=abc"), None);
-        assert_eq!(parse("n=-1"), None);
-        assert_eq!(parse(""), None);
+    fn ints_like_php() {
+        let params = parse("a=5&b=12abc&c=12.9&d=&e=abc&f=-3&g=%2B4&h=99999999999999999999&i=-");
+        assert_eq!(params.int("a"), Some(5));
+        assert_eq!(params.int("b"), Some(12));
+        assert_eq!(params.int("c"), Some(12));
+        assert_eq!(params.int("d"), Some(0));
+        assert_eq!(params.int("e"), Some(0));
+        assert_eq!(params.int("f"), Some(-3));
+        assert_eq!(params.int("g"), Some(4));
+        assert_eq!(params.int("h"), Some(i64::MAX));
+        assert_eq!(params.int("i"), Some(0));
+        assert_eq!(params.int("missing"), None);
     }
 
     #[test]
-    fn non_empty_falls_back() {
-        assert_eq!(non_empty(" en ", "commons"), "en");
-        assert_eq!(non_empty("  ", "commons"), "commons");
+    fn last_value_wins() {
+        assert_eq!(parse("x=a&x=b").text("x", ""), "b");
+    }
+
+    #[test]
+    fn text_falls_back_when_blank() {
+        let params = parse("a=+en+&b=++");
+        assert_eq!(params.text("a", "commons"), "en");
+        assert_eq!(params.text("b", "commons"), "commons");
+        assert_eq!(params.text("c", "commons"), "commons");
+        assert_eq!(params.raw("a", "commons"), " en ");
+        assert_eq!(params.raw("c", "commons"), "commons");
     }
 }

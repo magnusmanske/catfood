@@ -1,51 +1,44 @@
 //! Feeds of random images from a Commons category, e.g. for screensavers.
 
+use crate::AppState;
 use crate::db::{FileInfo, WikiDb};
 use crate::error::AppError;
 use crate::html;
-use crate::params::lenient;
-use crate::rss::{self, XmlText};
+use crate::params::Params;
+use crate::rss::{self, XmlText, php_urlencode};
 use crate::timestamp::Timestamp;
 use crate::wiki::Wiki;
 use axum::extract::{Query, State};
 use axum::response::Response;
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::fmt::{self, Write};
 use wikimisc::commons;
 use wikimisc::escape::xml;
 use wikimisc::title::{self, Case};
-use wikimisc::toolforge::pool::WikiPool;
 
 const DEFAULT_IMAGES: u32 = 100;
-const MAX_IMAGES: u32 = 500;
+/// The PHP version had no limit
+const MAX_IMAGES: u32 = 1000;
 /// The smallest standard thumbnail width of at least the traditional 75px
 const THUMB_WIDTH: u32 = 120;
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct Params {
-    category: String,
-    #[serde(deserialize_with = "lenient")]
-    max_images: Option<u32>,
-}
-
 pub async fn feed(
-    State(pool): State<WikiPool>,
-    Query(params): Query<Params>,
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let max_images = params
-        .max_images
-        .unwrap_or(DEFAULT_IMAGES)
-        .clamp(1, MAX_IMAGES);
-    let category = title::normalize(&params.category, Case::FirstLetter);
+    let params = Params::new(params);
+    let max_images = params.int("max_images").unwrap_or(DEFAULT_IMAGES.into());
+    let max_images =
+        u32::try_from(max_images.clamp(1, MAX_IMAGES.into())).unwrap_or(DEFAULT_IMAGES);
+    let category = title::normalize(params.text("category", ""), Case::FirstLetter);
     if category.is_empty() {
         return Ok(form(max_images));
     }
     let wiki = Wiki::commons();
-    let db = WikiDb::new(&pool, &wiki.dbname);
-    // Some of the files are not bitmaps, so ask for more than needed
+    let db = WikiDb::new(&state.pool, &wiki.dbname);
+    // Some files may still not be bitmaps, so ask for more than needed
     let names = db
-        .random_files(&title::to_db_key(&category), max_images * 2)
+        .random_bitmaps(&title::to_db_key(&category), max_images * 2)
         .await?;
     let mut files = db.files_by_name(&names).await?;
     let images: Vec<FileInfo> = names
@@ -59,6 +52,7 @@ pub async fn feed(
         images: &images,
         now: Timestamp::now(),
     };
+    wikimisc::metrics::counter!("feeds_served_total", "feed" => "commons_image_feed").increment(1);
     Ok(rss::response(
         feed,
         "text/xml; charset=utf-8",
@@ -105,14 +99,27 @@ fn write_image(f: &mut fmt::Formatter, image: &FileInfo, now: &impl fmt::Display
     let title = xml(&nice_title(&image.name)).into_owned();
     let page_url = xml(&commons::file_page_url(&image.name)).into_owned();
     let image_url = xml(&commons::upload_url(&image.name)).into_owned();
-    let thumb_url = xml(&commons::thumb_url(&image.name, THUMB_WIDTH)).into_owned();
-    let mime = xml(&image.mime).into_owned();
     let FileInfo {
         width,
         height,
         size,
         ..
-    } = image;
+    } = *image;
+    // Bitmaps can't be scaled up
+    let (thumb_url, thumb_width) = match width > THUMB_WIDTH {
+        true => (
+            xml(&commons::thumb_url(&image.name, THUMB_WIDTH)).into_owned(),
+            THUMB_WIDTH,
+        ),
+        false => (image_url.clone(), width),
+    };
+    // As in the PHP version
+    let guid = format!(
+        "{}/wiki/Special:Redirect/file/{}",
+        commons::COMMONS_SERVER,
+        php_urlencode(&image.name)
+    );
+    let mime = xml(&image.mime).into_owned();
     write!(
         f,
         "<item>\n<title>{title}</title>\n<link>{page_url}</link>\n<description>"
@@ -120,10 +127,10 @@ fn write_image(f: &mut fmt::Formatter, image: &FileInfo, now: &impl fmt::Display
     write!(XmlText(f), "<img src=\"{image_url}\" alt=\"\" />")?;
     write!(
         f,
-        "</description>\n<pubDate>{now}</pubDate>\n<guid>{image_url}</guid>\n\
+        "</description>\n<pubDate>{now}</pubDate>\n<guid>{guid}</guid>\n\
         <media:title>{title}</media:title>\n\
         <media:content url=\"{image_url}\" type=\"{mime}\" width=\"{width}\" height=\"{height}\"/>\n\
-        <media:thumbnail url=\"{thumb_url}\" width=\"{THUMB_WIDTH}\"/>\n\
+        <media:thumbnail url=\"{thumb_url}\" width=\"{thumb_width}\"/>\n\
         <media:credit role=\"uploader\">{}</media:credit>\n\
         <enclosure url=\"{image_url}\" type=\"{mime}\" length=\"{size}\"/>\n</item>\n",
         xml(&image.user)
@@ -195,6 +202,9 @@ mod tests {
         assert!(rss.contains("<title>Komodo &amp; friend</title>"));
         assert!(rss.contains("<media:credit role=\"uploader\">A &lt;b&gt;</media:credit>"));
         assert!(rss.contains("/thumb/"));
+        assert!(rss.contains(
+            "<guid>https://commons.wikimedia.org/wiki/Special:Redirect/file/Komodo_%26_friend.jpg</guid>"
+        ));
         assert!(rss.contains("length=\"12345\""));
         assert!(rss.contains("<description>&lt;img src=&quot;https://upload.wikimedia.org/"));
     }

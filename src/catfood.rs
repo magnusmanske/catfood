@@ -1,83 +1,81 @@
 //! Feeds of the latest files (or pages) in a category tree, or of a user's
 //! latest uploads.
 
+use crate::AppState;
 use crate::db::{FileInfo, MemberOrder, WikiDb};
 use crate::error::AppError;
 use crate::html;
-use crate::params::{lenient, non_empty};
-use crate::rss::{self, XmlText};
+use crate::params::Params;
+use crate::rss::{self, XmlText, php_urlencode};
 use crate::timestamp::Timestamp;
-use crate::wiki::Wiki;
+use crate::wiki::{self, Wiki};
 use axum::extract::{OriginalUri, Query, State};
+use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Redirect, Response};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 use wikimisc::commons;
 use wikimisc::escape::{html as escape_html, xml};
 use wikimisc::title::{self, Case};
-use wikimisc::toolforge::pool::WikiPool;
 
-const TOOL_URL: &str = "https://catfood.toolforge.org";
+const TOOL_URL: &str = "https://catfood.toolforge.org/catfood.php";
 /// Commons' own feed, which replaces the never implemented `motd` mode
 const MOTD_FEED: &str = "https://commons.wikimedia.org/w/api.php?action=featuredfeed&feed=motd&feedformat=rss&language=en";
-const FILE_NAMESPACE: u32 = 6;
+const FILE_NAMESPACE: i64 = 6;
 const MAX_DEPTH: u32 = 10;
 const MAX_ITEMS: u32 = 100;
 const DEFAULT_ITEMS: u32 = 10;
 const DEFAULT_SIZE: u32 = 300;
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct Params {
-    language: String,
-    project: String,
-    category: String,
-    user: String,
-    motd: String,
-    #[serde(deserialize_with = "lenient")]
-    depth: Option<u32>,
-    #[serde(deserialize_with = "lenient")]
-    namespace: Option<u32>,
-    #[serde(deserialize_with = "lenient")]
-    size: Option<u32>,
-    #[serde(deserialize_with = "lenient")]
-    last: Option<u32>,
-}
-
 pub async fn feed(
-    State(pool): State<WikiPool>,
+    State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
-    Query(params): Query<Params>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !params.motd.trim().is_empty() {
+    let params = Params::new(params);
+    if !params.text("motd", "").is_empty() {
         return Ok(Redirect::temporary(MOTD_FEED).into_response());
     }
-    let language = non_empty(&params.language, "commons");
-    let project = non_empty(&params.project, "wikimedia");
-    let depth = params.depth.unwrap_or(0).min(MAX_DEPTH);
-    let namespace = params.namespace.unwrap_or(FILE_NAMESPACE);
-    let wiki = Wiki::new(language, project);
-    let case = wiki.as_ref().map_or(Case::FirstLetter, |wiki| wiki.case);
-    let Some(source) = Source::new(&params, case, depth, namespace) else {
+    let language = params.text("language", "commons");
+    let project = params.text("project", "wikimedia");
+    let depth = params.int("depth").unwrap_or(0);
+    let namespace = params.int("namespace").unwrap_or(FILE_NAMESPACE);
+    let Some(source) = Source::new(&params, depth, namespace) else {
         return Ok(form(language, project, depth, namespace));
     };
-    let wiki = wiki.ok_or(AppError::BadRequest("Unknown language or project."))?;
-    let limit = params.last.unwrap_or(DEFAULT_ITEMS).clamp(1, MAX_ITEMS);
-    let items = fetch(&WikiDb::new(&pool, &wiki.dbname), &source, limit).await?;
-    if items.is_empty() {
-        return Err(AppError::NotFound("No files found."));
+    if namespace < 0 {
+        return Ok(no_files());
     }
+    let wiki = Wiki::resolve(&state.pool, &state.servers, language, project).await?;
+    let limit = params
+        .int("last")
+        .unwrap_or(DEFAULT_ITEMS.into())
+        .clamp(1, MAX_ITEMS.into());
+    let limit = u32::try_from(limit).unwrap_or(DEFAULT_ITEMS);
+    let items = fetch(&WikiDb::new(&state.pool, &wiki.dbname), &source, limit).await?;
+    if items.is_empty() {
+        return Ok(no_files());
+    }
+    let size = params
+        .int("size")
+        .filter(|&size| size > 0)
+        .unwrap_or(DEFAULT_SIZE.into());
     let feed = Feed {
         wiki: &wiki,
         source: &source,
         items: &items,
-        size: params.size.unwrap_or(DEFAULT_SIZE).clamp(20, 2000),
+        size: u32::try_from(size.clamp(20, 2000)).unwrap_or(DEFAULT_SIZE),
         self_url: &format!(
-            "{TOOL_URL}{}",
+            "https://catfood.toolforge.org{}",
             uri.path_and_query().map_or("/", |pq| pq.as_str())
         ),
+        legacy_host: &format!(
+            "{}.{}.org",
+            params.raw("language", "commons"),
+            params.raw("project", "wikimedia")
+        ),
     };
+    wikimisc::metrics::counter!("feeds_served_total", "feed" => "catfood").increment(1);
     Ok(rss::response(
         feed,
         "application/rss+xml; charset=utf-8",
@@ -85,22 +83,33 @@ pub async fn feed(
     ))
 }
 
+/// What the PHP version answered when there was nothing to show
+fn no_files() -> Response {
+    (
+        [(CONTENT_TYPE, "text/html; charset=utf-8")],
+        "No files found.",
+    )
+        .into_response()
+}
+
 /// What a feed lists
 enum Source {
-    /// The pages in a category tree; the category as DB key
+    /// The pages in a category tree; the category as DB key, case-sensitive
+    /// like in the PHP version, as some wikis are
     Category {
         name: String,
-        depth: u32,
-        namespace: u32,
+        /// As requested
+        depth: i64,
+        namespace: i64,
     },
     /// A user's uploads
     User(String),
 }
 
 impl Source {
-    fn new(params: &Params, case: Case, depth: u32, namespace: u32) -> Option<Self> {
-        let category = title::normalize(&params.category, case);
-        let user = title::normalize(&params.user, Case::FirstLetter);
+    fn new(params: &Params, depth: i64, namespace: i64) -> Option<Self> {
+        let category = title::normalize(params.text("category", ""), Case::Sensitive);
+        let user = title::normalize(params.text("user", ""), Case::FirstLetter);
         if !category.is_empty() {
             let name = title::to_db_key(&category);
             Some(Self::Category {
@@ -115,7 +124,7 @@ impl Source {
         }
     }
 
-    fn namespace(&self) -> u32 {
+    fn namespace(&self) -> i64 {
         match self {
             Self::Category { namespace, .. } => *namespace,
             Self::User(_) => FILE_NAMESPACE,
@@ -128,7 +137,8 @@ struct Item {
     /// DB key, without namespace prefix
     title: String,
     user: String,
-    /// Uploaded or edited
+    /// Uploaded or edited; to the minute, like the PHP version, which keeps
+    /// item dates and GUIDs unchanged
     timestamp: Timestamp,
     added_to_category: Option<Timestamp>,
     size: u64,
@@ -158,7 +168,7 @@ impl Item {
             page_id: file.page_id,
             title: file.name,
             user: file.user,
-            timestamp: file.timestamp,
+            timestamp: file.timestamp.to_minute(),
             added_to_category: added,
             size: file.size,
             kind: Kind::File {
@@ -178,66 +188,65 @@ impl Item {
 }
 
 async fn fetch(db: &WikiDb<'_>, source: &Source, limit: u32) -> Result<Vec<Item>, AppError> {
-    let (name, depth, namespace) = match source {
+    let files: Vec<(FileInfo, Option<Timestamp>)> = match source {
         Source::User(user) => {
             let files = db.files_by_user(user, limit).await?;
-            let page_ids: Vec<u64> = files.iter().map(|file| file.page_id).collect();
-            let mut categories = db.categories_of(&page_ids).await?;
-            return Ok(files
-                .into_iter()
-                .map(|file| Item::file(file, None, &mut categories))
-                .collect());
+            files.into_iter().map(|file| (file, None)).collect()
         }
         Source::Category {
             name,
             depth,
             namespace,
-        } => (name, *depth, *namespace),
+        } => {
+            // Negative meant unlimited in the PHP version
+            let depth = u32::try_from(*depth).map_or(MAX_DEPTH, |depth| depth.min(MAX_DEPTH));
+            let tree = db.category_tree(name, depth).await?;
+            if *namespace != FILE_NAMESPACE {
+                return page_items(db, &tree, *namespace, limit).await;
+            }
+            let files = db.category_files(&tree, limit).await?;
+            files
+                .into_iter()
+                .map(|(file, added)| (file, Some(added)))
+                .collect()
+        }
     };
-    let tree = db.category_tree(name, depth).await?;
-    if namespace == FILE_NAMESPACE {
-        let members = db
-            .category_members(&tree, namespace, MemberOrder::AddedToCategory, limit)
-            .await?;
-        let names: Vec<String> = members.iter().map(|m| m.title.clone()).collect();
-        let page_ids: Vec<u64> = members.iter().map(|m| m.page_id).collect();
-        let (mut files, mut categories) =
-            tokio::try_join!(db.files_by_name(&names), db.categories_of(&page_ids))?;
-        // Members without a local file, e.g. Commons files on other wikis, are skipped
-        Ok(members
-            .into_iter()
-            .filter_map(|m| {
-                Some(Item::file(
-                    files.remove(&m.title)?,
-                    Some(m.added),
-                    &mut categories,
-                ))
+    let page_ids: Vec<u64> = files.iter().map(|(file, _)| file.page_id).collect();
+    let mut categories = db.categories_of(&page_ids).await?;
+    Ok(files
+        .into_iter()
+        .map(|(file, added)| Item::file(file, added, &mut categories))
+        .collect())
+}
+
+async fn page_items(
+    db: &WikiDb<'_>,
+    tree: &[String],
+    namespace: i64,
+    limit: u32,
+) -> Result<Vec<Item>, AppError> {
+    let members = db
+        .category_members(tree, namespace, MemberOrder::LastEdit, limit)
+        .await?;
+    let revision_ids: Vec<u64> = members.iter().map(|m| m.latest_revision).collect();
+    let mut revisions = db.revisions(&revision_ids).await?;
+    Ok(members
+        .into_iter()
+        .filter_map(|m| {
+            let revision = revisions.remove(&m.latest_revision)?;
+            Some(Item {
+                page_id: m.page_id,
+                title: m.title,
+                user: revision.user,
+                timestamp: revision.timestamp.to_minute(),
+                added_to_category: None,
+                size: revision.size,
+                kind: Kind::Page {
+                    comment: revision.comment,
+                },
             })
-            .collect())
-    } else {
-        let members = db
-            .category_members(&tree, namespace, MemberOrder::LastEdit, limit)
-            .await?;
-        let revision_ids: Vec<u64> = members.iter().map(|m| m.latest_revision).collect();
-        let mut revisions = db.revisions(&revision_ids).await?;
-        Ok(members
-            .into_iter()
-            .filter_map(|m| {
-                let revision = revisions.remove(&m.latest_revision)?;
-                Some(Item {
-                    page_id: m.page_id,
-                    title: m.title,
-                    user: revision.user,
-                    timestamp: revision.timestamp,
-                    added_to_category: None,
-                    size: revision.size,
-                    kind: Kind::Page {
-                        comment: revision.comment,
-                    },
-                })
-            })
-            .collect())
-    }
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +303,8 @@ struct Feed<'a> {
     /// Maximum thumbnail width and height
     size: u32,
     self_url: &'a str,
+    /// `<language>.<project>.org` from the request, for PHP-compatible GUIDs
+    legacy_host: &'a str,
 }
 
 impl fmt::Display for Feed<'_> {
@@ -303,8 +314,8 @@ impl fmt::Display for Feed<'_> {
             Source::Category { name, depth, .. } => {
                 let name = title::to_display(name);
                 let depth = match depth {
-                    0 => String::new(),
-                    depth => format!("(depth {depth}) "),
+                    1.. => format!("(depth {depth}) "),
+                    _ => String::new(),
                 };
                 (
                     format!("{name} {depth}- {host}"),
@@ -329,15 +340,15 @@ impl fmt::Display for Feed<'_> {
 <channel>
 <atom:link href="{self_url}" rel="self" type="application/rss+xml"/>
 <title>{title}</title>
-<link>{TOOL_URL}/</link>
+<link>{TOOL_URL}</link>
 <description>{description}</description>
 <language>en-us</language>
 <copyright>Feed: GNU Free Documentation License; Images: see description page</copyright>
 <pubDate>{date}</pubDate>
 <lastBuildDate>{date}</lastBuildDate>
 <generator>CatFood</generator>
-<docs>{TOOL_URL}/</docs>
-<image><url>{logo}</url><title>{title}</title><link>{TOOL_URL}/</link></image>
+<docs>{TOOL_URL}</docs>
+<image><url>{logo}</url><title>{title}</title><link>{TOOL_URL}</link></image>
 "#,
             self_url = xml(self.self_url),
             description = xml(&description),
@@ -356,10 +367,7 @@ impl Feed<'_> {
             .wiki
             .page_url(self.source.namespace(), &item.title, item.page_id);
         let date = item.date().rss();
-        let guid = match item.added_to_category {
-            Some(_) => format!("{url} - {date}"),
-            None => url.clone(),
-        };
+        let guid = self.legacy_guid(item, &date);
         write!(
             f,
             "<item>\n<title>{}</title>\n<pubDate>{date}</pubDate>\n<link>{}</link>\n\
@@ -370,6 +378,24 @@ impl Feed<'_> {
         )?;
         self.write_description(&mut XmlText(f), item, &url)?;
         f.write_str("</description>\n</item>\n")
+    }
+
+    /// The GUID the PHP version used, so feed readers don't show old items
+    /// as new; it is opaque, so the old, sometimes broken, URL is fine
+    fn legacy_guid(&self, item: &Item, date: &impl fmt::Display) -> String {
+        let prefix = match self.source.namespace() {
+            FILE_NAMESPACE => "File:",
+            _ => "",
+        };
+        let url = format!(
+            "https://{}/wiki/{prefix}{}",
+            self.legacy_host,
+            php_urlencode(&item.title)
+        );
+        match item.added_to_category {
+            Some(_) => format!("{url} - {date}"),
+            None => url,
+        }
     }
 
     /// The HTML description of an item
@@ -486,10 +512,16 @@ fn group_thousands(n: u64) -> String {
     out
 }
 
-fn form(language: &str, project: &str, depth: u32, namespace: u32) -> Response {
-    let site = match Wiki::new(language, project) {
-        Some(wiki) => format!("<a href=\"{}\">{}</a>", wiki.server, wiki.host()),
-        None => escape_html(&format!("{language}.{project}.org")).into_owned(),
+fn form(language: &str, project: &str, depth: i64, namespace: i64) -> Response {
+    let name = escape_html(&format!(
+        "{} {}",
+        title::ucfirst(project),
+        title::ucfirst(language)
+    ))
+    .into_owned();
+    let site = match wiki::is_code(language) && wiki::is_code(project) {
+        true => format!("<a href=\"https://{language}.{project}.org\">{name}</a>"),
+        false => name,
     };
     let language = escape_html(language);
     let project = escape_html(project);
@@ -505,8 +537,8 @@ Enter the information below, or use URL parameters (click on "Do it" for a demo)
 <tr><th>Language</th><td><input class="form-control" type="text" name="language" value="{language}"></td><td>e.g., "en" or "commons"</td></tr>
 <tr><th>Project</th><td><input class="form-control" type="text" name="project" value="{project}"></td><td>e.g. "wikipedia"</td></tr>
 <tr><th>Category</th><td><input class="form-control" type="text" name="category" value="Featured pictures on Wikimedia Commons"></td><td>without the "Category:" prefix</td></tr>
-<tr><th>Depth</th><td><input class="form-control" type="number" name="depth" min="0" max="{MAX_DEPTH}" value="{depth}"></td><td>0=just this category</td></tr>
-<tr><th>Namespace</th><td><input class="form-control" type="number" name="namespace" min="0" value="{namespace}"></td><td>6=images; 0=article</td></tr>
+<tr><th>Depth</th><td><input class="form-control" type="number" name="depth" max="{MAX_DEPTH}" value="{depth}"></td><td>0=just this category</td></tr>
+<tr><th>Namespace</th><td><input class="form-control" type="number" name="namespace" value="{namespace}"></td><td>6=images; 0=article</td></tr>
 <tr><th>User</th><td><input class="form-control" type="text" name="user" value=""></td><td>user name, <i>instead</i> of category</td></tr>
 <tr><th>Size</th><td>
 <label class="mr-3"><input type="radio" name="size" value="200"> 200px</label>
@@ -550,6 +582,7 @@ mod tests {
             items,
             size: 300,
             self_url: "https://catfood.toolforge.org/?category=A&user=B",
+            legacy_host: "commons.wikimedia.org",
         }
         .to_string()
     }
@@ -632,6 +665,9 @@ mod tests {
         assert!(!rss.contains("<script>"));
         assert!(rss.contains("Original image: 4000&amp;times;3000 pixel; 1.234.567 bytes."));
         assert!(rss.contains("Added to category on Sun, 01 Mar 2026 00:00:00 GMT"));
+        assert!(rss.contains(
+            "<guid isPermaLink=\"false\">https://commons.wikimedia.org/wiki/File:Big_%3Ccat%3E.jpg - Sun, 01 Mar 2026 00:00:00 GMT</guid>"
+        ));
         assert!(rss.contains("Licensing : &lt;a href=&quot;https://en.wikipedia.org/wiki/CC-BY-SA&quot;&gt;CC-BY-SA&lt;/a&gt;"));
     }
 
@@ -640,7 +676,7 @@ mod tests {
         let source = Source::Category {
             name: "Cats".into(),
             depth: 0,
-            namespace: 0,
+            namespace: 14,
         };
         let item = Item {
             page_id: 5,
@@ -655,9 +691,11 @@ mod tests {
         };
         let rss = render(&source, &[item]);
         assert!(rss.contains("<title>Cats - commons.wikimedia.org</title>"));
+        // The PHP version left out the namespace; kept in the GUID only
         assert!(rss.contains(
             "<guid isPermaLink=\"false\">https://commons.wikimedia.org/wiki/Lion</guid>"
         ));
+        assert!(rss.contains("<link>https://commons.wikimedia.org/wiki/Category:Lion</link>"));
         assert!(rss.contains("Edited by user"));
         assert!(rss.contains("fix &amp;lt;b&amp;gt;"));
         assert!(rss.contains("New text length: 42 bytes."));
@@ -673,5 +711,8 @@ mod tests {
             rss.contains("<title>Uploads by User:Magnus Manske - commons.wikimedia.org</title>")
         );
         assert!(!rss.contains("Added to category"));
+        assert!(rss.contains(
+            "<guid isPermaLink=\"false\">https://commons.wikimedia.org/wiki/File:Big_%3Ccat%3E.jpg</guid>"
+        ));
     }
 }

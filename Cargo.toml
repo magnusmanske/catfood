@@ -19,6 +19,7 @@ wikimisc = { version = "0.3", default-features = false, features = [
     "escape",
     "logging",
     "server",
+    "telemetry",
     "title",
 ] }
 

@@ -23,10 +23,16 @@ crate: the `TOOL_REPLICA_*` environment variables on Toolforge, or
 `replica.my.cnf` with `local='true'` plus `toolforge-tunnel` locally. The server
 listens on `$PORT` (default 8000); set `RUST_LOG` for log verbosity.
 
+With `$DASHBOARD_TOKEN` set, health, request metrics, and the number of feeds
+served (`feeds_served_total`) are pushed to the
+[service dashboard](https://magnustools.toolforge.org/buggregator/#/dashboard);
+without it, telemetry is off.
+
 ## Deployment (Toolforge build service)
 
 ```sh
 become catfood
+toolforge envvars create DASHBOARD_TOKEN   # once, for telemetry
 toolforge build start <public git URL>
 toolforge webservice buildservice start --mount=none
 ```

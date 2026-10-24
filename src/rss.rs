@@ -15,6 +15,21 @@ impl<W: fmt::Write> fmt::Write for XmlText<'_, W> {
     }
 }
 
+/// Like PHP's `urlencode`, to keep the GUIDs of the PHP version
+pub fn php_urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                out.push(char::from(byte))
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 pub fn response(
     feed: impl fmt::Display,
     content_type: &'static str,
@@ -31,6 +46,14 @@ pub fn response(
 mod tests {
     use super::*;
     use std::fmt::Write;
+
+    #[test]
+    fn urlencode_like_php() {
+        assert_eq!(
+            php_urlencode("Foo_(bar)_é~ x.jpg"),
+            "Foo_%28bar%29_%C3%A9%7E+x.jpg"
+        );
+    }
 
     #[test]
     fn escapes_what_is_written() {

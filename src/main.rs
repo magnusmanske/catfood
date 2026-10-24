@@ -19,7 +19,9 @@ use axum::routing::get;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use wiki::Servers;
 use wikimisc::server::{self, health};
+use wikimisc::telemetry::Telemetry;
 use wikimisc::toolforge::db::Cluster;
 use wikimisc::toolforge::pool::WikiPool;
 
@@ -31,9 +33,20 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pool: WikiPool,
+    servers: Servers,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wikimisc::logging::init();
+    // Needs $DASHBOARD_TOKEN; `server::serve` sends the final push on shutdown
+    let _telemetry = Telemetry::builder("web")
+        .version(env!("CARGO_PKG_VERSION"))
+        .handle_signals(false)
+        .install_or_log();
     let pool = WikiPool::builder(Cluster::Web)
         .pool_max(POOL_MAX)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -51,6 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn router(pool: WikiPool) -> Router {
+    let state = AppState {
+        pool,
+        servers: Servers::default(),
+    };
     let router = Router::new()
         .route("/", get(catfood::feed))
         .route("/index.php", get(catfood::feed))
@@ -58,12 +75,9 @@ fn router(pool: WikiPool) -> Router {
         .route("/commons_image_feed.php", get(image_feed::feed))
         .route("/healthz", get(health::ok))
         .layer(map_response(security_headers))
-        .with_state(pool);
-    server::standard_layers(server::timeout(
-        router,
-        REQUEST_TIMEOUT,
-        StatusCode::GATEWAY_TIMEOUT,
-    ))
+        .with_state(state);
+    let router = server::timeout(router, REQUEST_TIMEOUT, StatusCode::GATEWAY_TIMEOUT);
+    server::request_metrics(server::standard_layers(router), &["/healthz"])
 }
 
 async fn security_headers(mut response: Response) -> Response {
@@ -79,16 +93,21 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use axum::http::header::{CONTENT_SECURITY_POLICY, LOCATION};
+    use std::path::PathBuf;
+    use std::sync::LazyLock;
     use tower::ServiceExt;
 
     /// A router whose pool never connects; enough for requests that don't
     /// reach the database
     fn test_router() -> Router {
-        let my_cnf = std::env::temp_dir().join("catfood-test-replica.my.cnf");
-        std::fs::write(&my_cnf, "[client]\nuser = test\npassword = test\n").unwrap();
+        static MY_CNF: LazyLock<PathBuf> = LazyLock::new(|| {
+            let path = std::env::temp_dir().join("catfood-test-replica.my.cnf");
+            std::fs::write(&path, "[client]\nuser = test\npassword = test\n").unwrap();
+            path
+        });
         router(
             WikiPool::builder(Cluster::Web)
-                .my_cnf_path(my_cnf)
+                .my_cnf_path(MY_CNF.as_path())
                 .build()
                 .unwrap(),
         )
@@ -145,6 +164,20 @@ mod tests {
     async fn rejects_invalid_wiki() {
         let (status, _) = get("/?category=Cats&language=evil.example/&project=wikipedia").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn lenient_like_php() {
+        // Repeated keys and blank values don't fail the request
+        let (status, response) = get("/?language=en&language=de&category=%20_%20&depth=x").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body(response).await.contains("value=\"de\""));
+        let (status, response) = get("/?namespace=-1").await;
+        assert!(body(response).await.contains("<form"));
+        let (status2, response) = get("/catfood.php?category=Cats&namespace=-1").await;
+        assert_eq!(status, status2);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body(response).await, "No files found.");
     }
 
     #[tokio::test]

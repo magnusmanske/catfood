@@ -8,8 +8,7 @@ use wikimisc::toolforge;
 pub enum AppError {
     #[error("{0}")]
     BadRequest(&'static str),
-    #[error("{0}")]
-    NotFound(&'static str),
+
     #[error("Unknown wiki")]
     UnknownWiki,
     #[error("database error: {0}")]
@@ -39,7 +38,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::NotFound(_) | Self::UnknownWiki => StatusCode::NOT_FOUND,
+            Self::UnknownWiki => StatusCode::NOT_FOUND,
             Self::Database(_) => {
                 tracing::error!("{self}");
                 return (

@@ -1,6 +1,6 @@
 //! MediaWiki timestamps (`YYYYMMDDHHMMSS`, UTC) and their RSS form.
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, Timelike, Utc};
 use std::fmt;
 use std::str::FromStr;
 
@@ -10,6 +10,11 @@ pub struct Timestamp(NaiveDateTime);
 impl Timestamp {
     pub fn now() -> Self {
         Self(Utc::now().naive_utc())
+    }
+
+    /// Without the seconds
+    pub fn to_minute(self) -> Self {
+        self.0.with_second(0).map_or(self, Self)
     }
 
     /// RFC 822 date, as RSS wants it: `Sat, 24 Oct 2026 08:15:00 GMT`
@@ -34,6 +39,12 @@ mod tests {
     fn parses_and_formats() {
         let ts: Timestamp = "20261024081500".parse().unwrap();
         assert_eq!(ts.rss().to_string(), "Sat, 24 Oct 2026 08:15:00 GMT");
+    }
+
+    #[test]
+    fn truncates_to_minute() {
+        let ts: Timestamp = "20261024081559".parse().unwrap();
+        assert_eq!(ts.to_minute(), "20261024081500".parse().unwrap());
     }
 
     #[test]

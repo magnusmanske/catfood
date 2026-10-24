@@ -10,6 +10,7 @@ use crate::timestamp::Timestamp;
 use std::collections::{HashMap, HashSet};
 use wikimisc::mysql_async::prelude::{FromRow, Queryable};
 use wikimisc::mysql_async::{Row, Value, from_row_opt};
+use wikimisc::toolforge::db::ExtensionDb;
 use wikimisc::toolforge::pool::WikiPool;
 
 const CATEGORY_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
@@ -19,21 +20,42 @@ const REVISION_TABLES: &[&str] = &["revision", "actor_revision", "comment_revisi
 /// Upper bound for the categories collected from a category tree
 const MAX_CATEGORIES: usize = 5000;
 
-const FILE_SELECT: &str = "SELECT page_id, file_name, fr_width, fr_height, ft_media_type,
-    CONCAT(ft_major_mime, '/', ft_minor_mime), actor_name, fr_timestamp, fr_size
-    FROM file
+const FILE_COLUMNS: &str = "page_id, file_name, fr_width, fr_height, ft_media_type,
+    CONCAT(ft_major_mime, '/', ft_minor_mime), actor_name, fr_timestamp, fr_size";
+const FILE_JOINS: &str = "FROM file
     JOIN filerevision ON fr_id = file_latest
     JOIN filetypes ON ft_id = file_type
     JOIN actor ON actor_id = fr_actor
     JOIN page ON page_namespace = 6 AND page_title = file_name";
+const CATEGORY_JOINS: &str = "JOIN categorylinks ON cl_from = page_id
+    JOIN linktarget ON lt_id = cl_target_id";
+/// `cl_timestamp` in the MediaWiki format
+const ADDED: &str = "DATE_FORMAT(cl_timestamp, '%Y%m%d%H%i%s')";
+/// Extensions of files that are never bitmaps
+const NON_BITMAP_EXTENSIONS: &str = "'flac','glb','mid','midi','mp3','mpeg','mpg',
+    'oga','ogg','ogv','opus','pdf','stl','svg','wav','webm'";
 
 type FileRow = (u64, String, u32, u32, String, String, String, String, u64);
+/// A [`FileRow`] plus when the file was added to the category
+type CategoryFileRow = (
+    u64,
+    String,
+    u32,
+    u32,
+    String,
+    String,
+    String,
+    String,
+    u64,
+    Option<String>,
+);
 
 pub struct CategoryMember {
     pub page_id: u64,
     pub title: String,
     pub latest_revision: u64,
-    pub added: Timestamp,
+    /// `None` if missing or invalid
+    pub added: Option<Timestamp>,
 }
 
 /// The current version of a file
@@ -91,6 +113,13 @@ impl<'a> WikiDb<'a> {
             .collect()
     }
 
+    /// The server URL of every wiki, by database name; for the `meta` database
+    pub async fn servers(&self) -> Result<HashMap<String, String>, AppError> {
+        let sql = "SELECT dbname, url FROM wiki WHERE url IS NOT NULL";
+        let rows: Vec<(String, String)> = self.query(&["wiki"], sql, vec![]).await?;
+        Ok(rows.into_iter().collect())
+    }
+
     /// `root` and its subcategories down to `depth` levels, as DB keys
     pub async fn category_tree(&self, root: &str, depth: u32) -> Result<Vec<String>, AppError> {
         let mut all = vec![root.to_string()];
@@ -102,9 +131,7 @@ impl<'a> WikiDb<'a> {
                 break;
             }
             let sql = format!(
-                "SELECT DISTINCT page_title FROM page
-                JOIN categorylinks ON cl_from = page_id
-                JOIN linktarget ON lt_id = cl_target_id
+                "SELECT DISTINCT page_title FROM page {CATEGORY_JOINS}
                 WHERE lt_namespace = 14 AND cl_type = 'subcat' AND lt_title IN ({})
                 LIMIT {MAX_CATEGORIES}",
                 placeholders(level.len())
@@ -126,7 +153,7 @@ impl<'a> WikiDb<'a> {
     pub async fn category_members(
         &self,
         categories: &[String],
-        namespace: u32,
+        namespace: i64,
         order: MemberOrder,
         limit: u32,
     ) -> Result<Vec<CategoryMember>, AppError> {
@@ -138,10 +165,8 @@ impl<'a> WikiDb<'a> {
             MemberOrder::LastEdit => "page_latest",
         };
         let sql = format!(
-            "SELECT page_id, page_title, page_latest, DATE_FORMAT(cl_timestamp, '%Y%m%d%H%i%s')
-            FROM page
-            JOIN categorylinks ON cl_from = page_id
-            JOIN linktarget ON lt_id = cl_target_id
+            "SELECT page_id, page_title, page_latest, {ADDED}
+            FROM page {CATEGORY_JOINS}
             WHERE lt_namespace = 14 AND page_namespace = ? AND lt_title IN ({})
             ORDER BY {order_by} DESC LIMIT ?",
             placeholders(categories.len())
@@ -150,30 +175,100 @@ impl<'a> WikiDb<'a> {
             .chain(values(categories))
             .chain([limit.into()])
             .collect();
-        let rows: Vec<(u64, String, u64, String)> =
+        let rows: Vec<(u64, String, u64, Option<String>)> =
             self.query(CATEGORY_TABLES, &sql, params).await?;
         let mut seen = HashSet::new();
-        rows.into_iter()
+        Ok(rows
+            .into_iter()
             .filter(|(page_id, ..)| seen.insert(*page_id))
-            .map(|(page_id, title, latest_revision, added)| {
-                Ok(CategoryMember {
-                    page_id,
-                    title,
-                    latest_revision,
-                    added: added.parse()?,
-                })
+            .map(|(page_id, title, latest_revision, added)| CategoryMember {
+                page_id,
+                title,
+                latest_revision,
+                added: added.and_then(|added| added.parse().ok()),
             })
+            .collect())
+    }
+
+    /// The files last added to any of `categories`, without duplicates, with
+    /// when they were added (if that is unknown, when they were uploaded, to
+    /// the minute, as in the PHP version)
+    pub async fn category_files(
+        &self,
+        categories: &[String],
+        limit: u32,
+    ) -> Result<Vec<(FileInfo, Timestamp)>, AppError> {
+        let tables = [FILE_TABLES, CATEGORY_TABLES].concat();
+        if !matches!(ExtensionDb::for_tables(self.dbname, &tables), Ok(None)) {
+            return self.category_files_split(categories, limit).await;
+        }
+        if categories.is_empty() {
+            return Ok(vec![]);
+        }
+        // Joined, so that the limit only counts pages with a local file
+        let sql = format!(
+            "SELECT {FILE_COLUMNS}, {ADDED} {FILE_JOINS} {CATEGORY_JOINS}
+            WHERE lt_namespace = 14 AND lt_title IN ({})
+            ORDER BY cl_timestamp DESC LIMIT ?",
+            placeholders(categories.len())
+        );
+        let params = values(categories).chain([limit.into()]).collect();
+        let rows: Vec<CategoryFileRow> = self.query(&tables, &sql, params).await?;
+        let mut seen = HashSet::new();
+        rows.into_iter()
+            .filter(|row| seen.insert(row.0))
+            .map(
+                |(page_id, name, width, height, media_type, mime, user, timestamp, size, added)| {
+                    let row = (
+                        page_id, name, width, height, media_type, mime, user, timestamp, size,
+                    );
+                    let file = file_info(row)?;
+                    let added = added.and_then(|added| added.parse().ok());
+                    let added = added.unwrap_or(file.timestamp.to_minute());
+                    Ok((file, added))
+                },
+            )
             .collect()
     }
 
-    /// Up to `limit` random files in `category`
-    pub async fn random_files(&self, category: &str, limit: u32) -> Result<Vec<String>, AppError> {
-        let sql = "SELECT page_title FROM page
-            JOIN categorylinks ON cl_from = page_id
-            JOIN linktarget ON lt_id = cl_target_id
+    /// [`Self::category_files`] for wikis whose category tables are in a
+    /// database of their own, i.e. Commons, where all files are local
+    async fn category_files_split(
+        &self,
+        categories: &[String],
+        limit: u32,
+    ) -> Result<Vec<(FileInfo, Timestamp)>, AppError> {
+        let members = self
+            .category_members(categories, 6, MemberOrder::AddedToCategory, limit)
+            .await?;
+        let names: Vec<String> = members.iter().map(|m| m.title.clone()).collect();
+        let mut files = self.files_by_name(&names).await?;
+        Ok(members
+            .into_iter()
+            .filter_map(|m| {
+                let file = files.remove(&m.title)?;
+                let added = m.added.unwrap_or(file.timestamp.to_minute());
+                Some((file, added))
+            })
+            .collect())
+    }
+
+    /// Up to `limit` random files in `category`, without those that are
+    /// certainly not bitmaps, judging by their extension. The media type is
+    /// in the core database, which can't be joined on Commons.
+    pub async fn random_bitmaps(
+        &self,
+        category: &str,
+        limit: u32,
+    ) -> Result<Vec<String>, AppError> {
+        let sql = format!(
+            "SELECT page_title FROM page {CATEGORY_JOINS}
             WHERE lt_namespace = 14 AND lt_title = ? AND cl_type = 'file'
-            ORDER BY RAND() LIMIT ?";
-        self.query(CATEGORY_TABLES, sql, vec![category.into(), limit.into()])
+            AND SUBSTRING_INDEX(LOWER(CONVERT(page_title USING utf8mb4)), '.', -1)
+                NOT IN ({NON_BITMAP_EXTENSIONS})
+            ORDER BY RAND() LIMIT ?"
+        );
+        self.query(CATEGORY_TABLES, &sql, vec![category.into(), limit.into()])
             .await
     }
 
@@ -186,7 +281,7 @@ impl<'a> WikiDb<'a> {
             return Ok(HashMap::new());
         }
         let sql = format!(
-            "{FILE_SELECT} WHERE file_name IN ({})",
+            "SELECT {FILE_COLUMNS} {FILE_JOINS} WHERE file_name IN ({})",
             placeholders(names.len())
         );
         let rows: Vec<FileRow> = self
@@ -199,7 +294,10 @@ impl<'a> WikiDb<'a> {
 
     /// The files last uploaded by `user`, latest first
     pub async fn files_by_user(&self, user: &str, limit: u32) -> Result<Vec<FileInfo>, AppError> {
-        let sql = format!("{FILE_SELECT} WHERE actor_name = ? ORDER BY fr_timestamp DESC LIMIT ?");
+        let sql = format!(
+            "SELECT {FILE_COLUMNS} {FILE_JOINS}
+            WHERE actor_name = ? ORDER BY fr_timestamp DESC LIMIT ?"
+        );
         let rows: Vec<FileRow> = self
             .query(FILE_TABLES, &sql, vec![user.into(), limit.into()])
             .await?;

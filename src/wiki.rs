@@ -1,6 +1,12 @@
 //! Which wiki a feed is for: its replica database and its web address.
 
-use wikimisc::title::{self, Case};
+use crate::db::WikiDb;
+use crate::error::AppError;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
+use wikimisc::title;
+use wikimisc::toolforge::pool::WikiPool;
 
 /// Projects whose database name is `<language><project>`
 const PROJECTS: &[&str] = &[
@@ -39,54 +45,29 @@ pub struct Wiki {
     pub dbname: String,
     /// e.g. `https://en.wikipedia.org`
     pub server: String,
-    /// Whether titles get their first letter capitalized
-    pub case: Case,
 }
 
 impl Wiki {
     /// The wiki for the `language` and `project` parameters, e.g. `en` and
-    /// `wikipedia`. Whether it exists is checked when connecting to it.
-    pub fn new(language: &str, project: &str) -> Option<Self> {
-        let language = language.trim().to_ascii_lowercase();
-        let project = project.trim().to_ascii_lowercase();
-        if !is_language_code(&language) {
-            return None;
-        }
-        let db_language = language.replace('-', "_");
-        let (dbname, host) = match (language.as_str(), project.as_str()) {
-            ("commons" | "meta" | "species", _) => (
-                format!("{language}wiki"),
-                format!("{language}.wikimedia.org"),
-            ),
-            ("wikidata", _) | (_, "wikidata") => ("wikidatawiki".into(), "www.wikidata.org".into()),
-            ("mediawiki", _) | (_, "mediawiki") => {
-                ("mediawikiwiki".into(), "www.mediawiki.org".into())
-            }
-            (_, "wikipedia") => (
-                format!("{db_language}wiki"),
-                format!("{language}.wikipedia.org"),
-            ),
-            (_, p) if PROJECTS.contains(&p) => {
-                (format!("{db_language}{p}"), format!("{language}.{p}.org"))
-            }
-            _ => return None,
-        };
-        let case = match project.as_str() {
-            "wiktionary" => Case::Sensitive,
-            _ => Case::FirstLetter,
-        };
-        Some(Self {
-            dbname,
-            server: format!("https://{host}"),
-            case,
-        })
+    /// `wikipedia`
+    pub async fn resolve(
+        pool: &WikiPool,
+        servers: &Servers,
+        language: &str,
+        project: &str,
+    ) -> Result<Self, AppError> {
+        let dbname = dbname(language, project).ok_or(AppError::BadRequest("Invalid language."))?;
+        let server = servers
+            .get(pool, &dbname)
+            .await?
+            .ok_or(AppError::UnknownWiki)?;
+        Ok(Self { dbname, server })
     }
 
     pub fn commons() -> Self {
         Self {
             dbname: "commonswiki".into(),
             server: "https://commons.wikimedia.org".into(),
-            case: Case::FirstLetter,
         }
     }
 
@@ -103,7 +84,7 @@ impl Wiki {
     }
 
     /// The URL of a page, given its title without the namespace prefix
-    pub fn page_url(&self, namespace: u32, title: &str, page_id: u64) -> String {
+    pub fn page_url(&self, namespace: i64, title: &str, page_id: u64) -> String {
         match usize::try_from(namespace)
             .ok()
             .and_then(|ns| NAMESPACES.get(ns))
@@ -115,10 +96,46 @@ impl Wiki {
     }
 }
 
-fn is_language_code(s: &str) -> bool {
-    (1..=20).contains(&s.len())
+/// The database name, chosen like the PHP version did (which ignored
+/// `project`), except that sister projects now get their own database.
+pub fn dbname(language: &str, project: &str) -> Option<String> {
+    let language = language.trim().to_ascii_lowercase();
+    if !is_code(&language) {
+        return None;
+    }
+    let language = language.replace('-', "_");
+    let project = project.trim().to_ascii_lowercase();
+    Some(match (language.as_str(), project.as_str()) {
+        ("commons" | "meta" | "species" | "wikidata" | "mediawiki", _) => format!("{language}wiki"),
+        (_, "wikidata" | "mediawiki") => format!("{project}wiki"),
+        (_, "wikispecies") => "specieswiki".into(),
+        (_, p) if PROJECTS.contains(&p) => format!("{language}{p}"),
+        // `wikipedia`, but also the form's default `wikimedia`, and anything else
+        _ => format!("{language}wiki"),
+    })
+}
+
+/// A language or project code: lowercase letters, digits, hyphens; and
+/// underscores, as in `zh_yue`, the only spelling the PHP version accepted
+pub fn is_code(s: &str) -> bool {
+    (1..=30).contains(&s.len())
         && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// The server URLs of all wikis, by database name, loaded from `meta_p` on
+/// first use. Wikis created later are only known after a restart.
+#[derive(Debug, Clone, Default)]
+pub struct Servers(Arc<OnceCell<HashMap<String, String>>>);
+
+impl Servers {
+    async fn get(&self, pool: &WikiPool, dbname: &str) -> Result<Option<String>, AppError> {
+        let servers = self
+            .0
+            .get_or_try_init(|| async { WikiDb::new(pool, "meta").servers().await })
+            .await?;
+        Ok(servers.get(dbname).cloned())
+    }
 }
 
 #[cfg(test)]
@@ -126,40 +143,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commons() {
-        let wiki = Wiki::new("commons", "wikimedia").unwrap();
-        assert_eq!(wiki, Wiki::commons());
-        assert_eq!(wiki.host(), "commons.wikimedia.org");
+    fn dbnames() {
+        let db = |language, project| dbname(language, project).unwrap();
+        assert_eq!(db("commons", "wikimedia"), "commonswiki");
+        assert_eq!(db(" EN ", "wikipedia"), "enwiki");
+        assert_eq!(db("en", "wikimedia"), "enwiki");
+        assert_eq!(db("en", "unknown project"), "enwiki");
+        assert_eq!(db("incubator", "wikimedia"), "incubatorwiki");
+        assert_eq!(db("zh-yue", "wikipedia"), "zh_yuewiki");
+        assert_eq!(db("zh_yue", "wikipedia"), "zh_yuewiki");
+        assert_eq!(db("de", "Wiktionary"), "dewiktionary");
+        assert_eq!(db("www", "wikidata"), "wikidatawiki");
+        assert_eq!(db("species", "wikimedia"), "specieswiki");
     }
 
     #[test]
-    fn wikipedia() {
-        let wiki = Wiki::new(" EN ", "wikipedia").unwrap();
-        assert_eq!(wiki.dbname, "enwiki");
-        assert_eq!(wiki.server, "https://en.wikipedia.org");
-        assert_eq!(
-            Wiki::new("zh-yue", "wikipedia").unwrap().dbname,
-            "zh_yuewiki"
-        );
+    fn rejects_bad_languages() {
+        assert_eq!(dbname("", "wikipedia"), None);
+        assert_eq!(dbname("evil.com/", "wikipedia"), None);
+        assert_eq!(dbname("en wiki", "wikipedia"), None);
     }
 
     #[test]
-    fn other_projects() {
-        let wiki = Wiki::new("de", "wiktionary").unwrap();
-        assert_eq!(wiki.dbname, "dewiktionary");
-        assert_eq!(wiki.case, Case::Sensitive);
-        assert_eq!(
-            Wiki::new("x", "wikidata").unwrap().host(),
-            "www.wikidata.org"
-        );
-    }
-
-    #[test]
-    fn rejects_bad_input() {
-        assert_eq!(Wiki::new("", "wikipedia"), None);
-        assert_eq!(Wiki::new("en", "example"), None);
-        assert_eq!(Wiki::new("evil.com/", "wikipedia"), None);
-        assert_eq!(Wiki::new("en wiki", "wikipedia"), None);
+    fn hosts() {
+        assert_eq!(Wiki::commons().host(), "commons.wikimedia.org");
     }
 
     #[test]
