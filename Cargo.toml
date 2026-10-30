@@ -2,7 +2,6 @@
 name = "catfood"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
 description = "RSS feeds of the latest files and pages in Wikimedia categories"
 license = "GPL-2.0-or-later"
 publish = false
