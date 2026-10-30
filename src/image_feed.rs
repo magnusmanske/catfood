@@ -35,7 +35,7 @@ pub async fn feed(
         return Ok(form(max_images));
     }
     let wiki = Wiki::commons();
-    let db = WikiDb::new(&state.pool, &wiki.dbname);
+    let db = WikiDb::new(&state.replicas, &wiki.dbname);
     // Some files may still not be bitmaps, so ask for more than needed
     let names = db
         .random_bitmaps(&title::to_db_key(&category), max_images * 2)

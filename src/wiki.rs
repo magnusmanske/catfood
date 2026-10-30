@@ -5,8 +5,8 @@ use crate::error::AppError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
+use wikimisc::replicas::Replicas;
 use wikimisc::title;
-use wikimisc::toolforge::pool::WikiPool;
 
 /// Projects whose database name is `<language><project>`
 const PROJECTS: &[&str] = &[
@@ -51,14 +51,14 @@ impl Wiki {
     /// The wiki for the `language` and `project` parameters, e.g. `en` and
     /// `wikipedia`
     pub async fn resolve(
-        pool: &WikiPool,
+        replicas: &Replicas,
         servers: &Servers,
         language: &str,
         project: &str,
     ) -> Result<Self, AppError> {
         let dbname = dbname(language, project).ok_or(AppError::BadRequest("Invalid language."))?;
         let server = servers
-            .get(pool, &dbname)
+            .get(replicas, &dbname)
             .await?
             .ok_or(AppError::UnknownWiki)?;
         Ok(Self { dbname, server })
@@ -129,10 +129,10 @@ pub fn is_code(s: &str) -> bool {
 pub struct Servers(Arc<OnceCell<HashMap<String, String>>>);
 
 impl Servers {
-    async fn get(&self, pool: &WikiPool, dbname: &str) -> Result<Option<String>, AppError> {
+    async fn get(&self, replicas: &Replicas, dbname: &str) -> Result<Option<String>, AppError> {
         let servers = self
             .0
-            .get_or_try_init(|| async { WikiDb::new(pool, "meta").servers().await })
+            .get_or_try_init(|| async { WikiDb::new(replicas, "meta").servers().await })
             .await?;
         Ok(servers.get(dbname).cloned())
     }

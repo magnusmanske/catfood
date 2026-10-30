@@ -10,8 +10,8 @@ use crate::timestamp::Timestamp;
 use std::collections::{HashMap, HashSet};
 use wikimisc::mysql_async::prelude::{FromRow, Queryable};
 use wikimisc::mysql_async::{Row, Value, from_row_opt};
+use wikimisc::replicas::Replicas;
 use wikimisc::toolforge::db::ExtensionDb;
-use wikimisc::toolforge::pool::WikiPool;
 
 const CATEGORY_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
 const FILE_TABLES: &[&str] = &["page", "file", "filerevision", "filetypes", "actor"];
@@ -89,13 +89,13 @@ pub enum MemberOrder {
 
 /// The replica databases of one wiki
 pub struct WikiDb<'a> {
-    pool: &'a WikiPool,
+    replicas: &'a Replicas,
     dbname: &'a str,
 }
 
 impl<'a> WikiDb<'a> {
-    pub fn new(pool: &'a WikiPool, dbname: &'a str) -> Self {
-        Self { pool, dbname }
+    pub fn new(replicas: &'a Replicas, dbname: &'a str) -> Self {
+        Self { replicas, dbname }
     }
 
     /// Runs a prepared statement. Rows are converted without panicking on
@@ -106,7 +106,10 @@ impl<'a> WikiDb<'a> {
         sql: &str,
         params: Vec<Value>,
     ) -> Result<Vec<T>, AppError> {
-        let mut conn = self.pool.connect_for_tables(self.dbname, tables).await?;
+        let mut conn = self
+            .replicas
+            .connect_for_tables(self.dbname, tables)
+            .await?;
         let rows: Vec<Row> = conn.exec(sql, params).await?;
         rows.into_iter()
             .map(|row| from_row_opt(row).map_err(AppError::from))

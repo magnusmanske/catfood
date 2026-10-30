@@ -49,7 +49,7 @@ fn moved_to(path: &'static str) -> MethodRouter<AppState> {
 
 /// `OK` if a database connection is available
 async fn health(State(state): State<AppState>) -> (StatusCode, &'static str) {
-    match tokio::time::timeout(HEALTH_TIMEOUT, state.pool.connect(HEALTH_DB)).await {
+    match tokio::time::timeout(HEALTH_TIMEOUT, state.replicas.pool().connect(HEALTH_DB)).await {
         Ok(Ok(_)) => (StatusCode::OK, "OK"),
         Ok(Err(error)) => {
             tracing::warn!("health check failed: {error}");
@@ -79,8 +79,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::LazyLock;
     use tower::ServiceExt;
+    use wikimisc::replicas::Replicas;
     use wikimisc::toolforge::db::Cluster;
-    use wikimisc::toolforge::pool::WikiPool;
 
     /// A router whose pool never connects; enough for requests that don't
     /// reach the database
@@ -90,12 +90,12 @@ mod tests {
             std::fs::write(&path, "[client]\nuser = test\npassword = test\n").unwrap();
             path
         });
-        let pool = WikiPool::builder(Cluster::Web)
+        let replicas = Replicas::builder(Cluster::Web)
             .my_cnf_path(MY_CNF.as_path())
             .build()
             .unwrap();
         router(AppState {
-            pool,
+            replicas,
             servers: Servers::default(),
         })
     }
