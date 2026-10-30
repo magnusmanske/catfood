@@ -33,6 +33,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
 name = "arc-swap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2455,15 +2461,16 @@ dependencies = [
 
 [[package]]
 name = "wikimisc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16fe301c349426170bf436ca0e24502495882ada53b0d33c5e53a0b761116507"
+version = "0.3.1"
+source = "git+https://github.com/magnusmanske/wikimisc#57e866e4a4e489a2c6018f90e12c253df21baa9f"
 dependencies = [
+ "anyhow",
  "axum",
  "log",
  "md5",
  "metrics",
  "metrics-util",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
