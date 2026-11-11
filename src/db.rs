@@ -15,7 +15,6 @@ use wikimisc::toolforge::db::ExtensionDb;
 
 const CATEGORY_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
 const FILE_TABLES: &[&str] = &["page", "file", "filerevision", "filetypes", "actor"];
-const REVISION_TABLES: &[&str] = &["revision", "actor_revision", "comment_revision"];
 
 /// Upper bound for the categories collected from a category tree
 const MAX_CATEGORIES: usize = 5000;
@@ -53,7 +52,6 @@ type CategoryFileRow = (
 pub struct CategoryMember {
     pub page_id: u64,
     pub title: String,
-    pub latest_revision: u64,
     /// `None` if missing or invalid
     pub added: Option<Timestamp>,
 }
@@ -70,21 +68,6 @@ pub struct FileInfo {
     pub user: String,
     pub timestamp: Timestamp,
     pub size: u64,
-}
-
-pub struct Revision {
-    pub user: String,
-    pub timestamp: Timestamp,
-    pub size: u64,
-    pub comment: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MemberOrder {
-    AddedToCategory,
-    /// Approximated by the latest revision ID, as the category tables can't
-    /// be joined with `revision` on Commons
-    LastEdit,
 }
 
 /// The replica databases of one wiki
@@ -157,37 +140,31 @@ impl<'a> WikiDb<'a> {
         &self,
         categories: &[String],
         namespace: i64,
-        order: MemberOrder,
         limit: u32,
     ) -> Result<Vec<CategoryMember>, AppError> {
         if categories.is_empty() {
             return Ok(vec![]);
         }
-        let order_by = match order {
-            MemberOrder::AddedToCategory => "cl_timestamp",
-            MemberOrder::LastEdit => "page_latest",
-        };
         let sql = format!(
-            "SELECT page_id, page_title, page_latest, {ADDED}
+            "SELECT page_id, page_title, {ADDED}
             FROM page {CATEGORY_JOINS}
             WHERE lt_namespace = 14 AND page_namespace = ? AND lt_title IN ({})
-            ORDER BY {order_by} DESC LIMIT ?",
+            ORDER BY cl_timestamp DESC LIMIT ?",
             placeholders(categories.len())
         );
         let params = std::iter::once(namespace.into())
             .chain(values(categories))
             .chain([limit.into()])
             .collect();
-        let rows: Vec<(u64, String, u64, Option<String>)> =
+        let rows: Vec<(u64, String, Option<String>)> =
             self.query(CATEGORY_TABLES, &sql, params).await?;
         let mut seen = HashSet::new();
         Ok(rows
             .into_iter()
             .filter(|(page_id, ..)| seen.insert(*page_id))
-            .map(|(page_id, title, latest_revision, added)| CategoryMember {
+            .map(|(page_id, title, added)| CategoryMember {
                 page_id,
                 title,
-                latest_revision,
                 added: added.and_then(|added| added.parse().ok()),
             })
             .collect())
@@ -242,7 +219,7 @@ impl<'a> WikiDb<'a> {
         limit: u32,
     ) -> Result<Vec<(FileInfo, Timestamp)>, AppError> {
         let members = self
-            .category_members(categories, 6, MemberOrder::AddedToCategory, limit)
+            .category_members(categories, 6, limit)
             .await?;
         let names: Vec<String> = members.iter().map(|m| m.title.clone()).collect();
         let mut files = self.files_by_name(&names).await?;
@@ -305,37 +282,6 @@ impl<'a> WikiDb<'a> {
             .query(FILE_TABLES, &sql, vec![user.into(), limit.into()])
             .await?;
         rows.into_iter().map(file_info).collect()
-    }
-
-    /// The revisions with the given IDs, by ID
-    pub async fn revisions(&self, ids: &[u64]) -> Result<HashMap<u64, Revision>, AppError> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let sql = format!(
-            "SELECT rev_id, actor_name, rev_timestamp, rev_len, comment_text
-            FROM revision
-            LEFT JOIN actor_revision ON actor_id = rev_actor
-            LEFT JOIN comment_revision ON comment_id = rev_comment_id
-            WHERE rev_id IN ({})",
-            placeholders(ids.len())
-        );
-        type RevisionRow = (u64, Option<String>, String, Option<u64>, Option<Vec<u8>>);
-        let rows: Vec<RevisionRow> = self
-            .query(REVISION_TABLES, &sql, values(ids).collect())
-            .await?;
-        rows.into_iter()
-            .map(|(id, user, timestamp, size, comment)| {
-                let revision = Revision {
-                    user: user.unwrap_or_default(),
-                    timestamp: timestamp.parse()?,
-                    size: size.unwrap_or_default(),
-                    // Old comments may have been cut off in the middle of a character
-                    comment: String::from_utf8_lossy(&comment.unwrap_or_default()).into_owned(),
-                };
-                Ok((id, revision))
-            })
-            .collect()
     }
 
     /// The categories of the given pages, as DB keys, by page ID

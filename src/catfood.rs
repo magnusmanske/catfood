@@ -2,7 +2,7 @@
 //! latest uploads.
 
 use crate::AppState;
-use crate::db::{FileInfo, MemberOrder, WikiDb};
+use crate::db::{FileInfo, WikiDb};
 use crate::error::AppError;
 use crate::html;
 use crate::params::Params;
@@ -153,9 +153,7 @@ enum Kind {
         media_type: String,
         licenses: Vec<License>,
     },
-    Page {
-        comment: String,
-    },
+    AddedToCategory,
 }
 
 impl Item {
@@ -227,24 +225,22 @@ async fn page_items(
     limit: u32,
 ) -> Result<Vec<Item>, AppError> {
     let members = db
-        .category_members(tree, namespace, MemberOrder::LastEdit, limit)
+        .category_members(tree, namespace, limit)
         .await?;
-    let revision_ids: Vec<u64> = members.iter().map(|m| m.latest_revision).collect();
-    let mut revisions = db.revisions(&revision_ids).await?;
     Ok(members
         .into_iter()
         .filter_map(|m| {
-            let revision = revisions.remove(&m.latest_revision)?;
+            // `cl_timestamp` is NOT NULL; a missing or unparsable value cannot
+            // be dated, so it is not a usable feed entry.
+            let added = m.added?;
             Some(Item {
                 page_id: m.page_id,
                 title: m.title,
-                user: revision.user,
-                timestamp: revision.timestamp.to_minute(),
-                added_to_category: None,
-                size: revision.size,
-                kind: Kind::Page {
-                    comment: revision.comment,
-                },
+                user: String::new(),
+                timestamp: added,
+                added_to_category: Some(added),
+                size: 0,
+                kind: Kind::AddedToCategory,
             })
         })
         .collect())
@@ -445,12 +441,9 @@ impl Feed<'_> {
                 writeln!(out, "{size} bytes.<br/>")?;
                 write_licenses(out, licenses, &url)
             }
-            Kind::Page { comment } => write!(
-                out,
-                "Edited by user \"<a href=\"{user_url}\">{user}</a>\" on {timestamp}<br/>\n\
-                \"<i>{}</i>\"<br/>New text length: {size} bytes.<br/>\n",
-                escape_html(comment)
-            ),
+            Kind::AddedToCategory => {
+                writeln!(out, "Added to category on {}<br/>", item.timestamp.rss())
+            }
         }
     }
 }
@@ -682,24 +675,19 @@ mod tests {
         let item = Item {
             page_id: 5,
             title: "Lion".into(),
-            user: "Someone".into(),
+            user: String::new(),
             timestamp: "20260101120000".parse().unwrap(),
-            added_to_category: None,
-            size: 42,
-            kind: Kind::Page {
-                comment: "fix <b>".into(),
-            },
+            added_to_category: Some("20260101120000".parse().unwrap()),
+            size: 0,
+            kind: Kind::AddedToCategory,
         };
         let rss = render(&source, &[item]);
         assert!(rss.contains("<title>Cats - commons.wikimedia.org</title>"));
-        // The PHP version left out the namespace; kept in the GUID only
-        assert!(rss.contains(
-            "<guid isPermaLink=\"false\">https://commons.wikimedia.org/wiki/Lion</guid>"
-        ));
         assert!(rss.contains("<link>https://commons.wikimedia.org/wiki/Category:Lion</link>"));
-        assert!(rss.contains("Edited by user"));
-        assert!(rss.contains("fix &amp;lt;b&amp;gt;"));
-        assert!(rss.contains("New text length: 42 bytes."));
+        assert!(rss.contains("Added to category on Thu, 01 Jan 2026 12:00:00 GMT"));
+        assert!(rss.contains(
+            "<guid isPermaLink=\"false\">https://commons.wikimedia.org/wiki/Lion - Thu, 01 Jan 2026 12:00:00 GMT</guid>"
+        ));
     }
 
     #[test]
