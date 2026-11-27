@@ -11,7 +11,6 @@ use axum::routing::{MethodRouter, get};
 use std::time::Duration;
 use wikimisc::server;
 
-pub const BASE_URL: &str = "https://catfood.toolforge.org";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 /// The default wiki of both feeds
@@ -35,10 +34,10 @@ pub fn router(state: AppState) -> Router {
 /// Redirects permanently to `path`, keeping the query string. 301 rather
 /// than 308, which old feed readers may not know.
 fn moved_to(path: &'static str) -> MethodRouter<AppState> {
-    get(move |uri: Uri| async move {
+    get(move |State(state): State<AppState>, uri: Uri| async move {
         let location = match uri.query().filter(|query| !query.is_empty()) {
-            Some(query) => format!("{BASE_URL}{path}?{query}"),
-            None => format!("{BASE_URL}{path}"),
+            Some(query) => format!("{}{path}?{query}", state.base_url),
+            None => format!("{}{path}", state.base_url),
         };
         match HeaderValue::try_from(location) {
             Ok(location) => (StatusCode::MOVED_PERMANENTLY, [(LOCATION, location)]).into_response(),
@@ -82,6 +81,8 @@ mod tests {
     use wikimisc::replicas::Replicas;
     use wikimisc::toolforge::db::Cluster;
 
+    const TEST_BASE: &str = "https://catfood.example";
+
     /// A router whose pool never connects; enough for requests that don't
     /// reach the database
     fn test_router() -> Router {
@@ -94,10 +95,12 @@ mod tests {
             .my_cnf_path(MY_CNF.as_path())
             .build()
             .unwrap();
-        router(AppState {
+        router(AppState::new(
             replicas,
-            servers: Servers::default(),
-        })
+            Servers::default(),
+            TEST_BASE,
+            format!("{TEST_BASE}/catfood"),
+        ))
     }
 
     async fn get(uri: &str) -> (StatusCode, Response<Body>) {
@@ -145,7 +148,7 @@ mod tests {
             assert_eq!(status, StatusCode::MOVED_PERMANENTLY, "{from}");
             assert_eq!(
                 response.headers()[LOCATION],
-                format!("{BASE_URL}{to}"),
+                format!("{TEST_BASE}{to}"),
                 "{from}"
             );
         }

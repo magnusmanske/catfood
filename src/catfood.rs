@@ -6,7 +6,6 @@ use crate::db::{FileInfo, WikiDb};
 use crate::error::AppError;
 use crate::html;
 use crate::params::Params;
-use crate::routes::BASE_URL;
 use crate::rss::{self, XmlText, php_urlencode};
 use crate::timestamp::Timestamp;
 use crate::wiki::{self, Wiki};
@@ -19,7 +18,6 @@ use wikimisc::commons;
 use wikimisc::escape::{html as escape_html, xml};
 use wikimisc::title::{self, Case};
 
-const TOOL_URL: &str = "https://catfood.toolforge.org/catfood";
 /// Commons' own feed, which replaces the never implemented `motd` mode
 const MOTD_FEED: &str = "https://commons.wikimedia.org/w/api.php?action=featuredfeed&feed=motd&feedformat=rss&language=en";
 const FILE_NAMESPACE: i64 = 6;
@@ -61,15 +59,18 @@ pub async fn feed(
         .int("size")
         .filter(|&size| size > 0)
         .unwrap_or(DEFAULT_SIZE.into());
+    let self_url = format!(
+        "{}{}",
+        state.base_url,
+        uri.path_and_query().map_or("/", |pq| pq.as_str())
+    );
     let feed = Feed {
         wiki: &wiki,
         source: &source,
         items: &items,
         size: u32::try_from(size.clamp(20, 2000)).unwrap_or(DEFAULT_SIZE),
-        self_url: &format!(
-            "{BASE_URL}{}",
-            uri.path_and_query().map_or("/", |pq| pq.as_str())
-        ),
+        self_url: &self_url,
+        tool_url: &state.tool_url,
         legacy_host: &format!(
             "{}.{}.org",
             params.raw("language", "commons"),
@@ -300,6 +301,8 @@ struct Feed<'a> {
     /// Maximum thumbnail width and height
     size: u32,
     self_url: &'a str,
+    /// The canonical feed URL, for the channel links
+    tool_url: &'a str,
     /// `<language>.<project>.org` from the request, for PHP-compatible GUIDs
     legacy_host: &'a str,
 }
@@ -337,17 +340,18 @@ impl fmt::Display for Feed<'_> {
 <channel>
 <atom:link href="{self_url}" rel="self" type="application/rss+xml"/>
 <title>{title}</title>
-<link>{TOOL_URL}</link>
+<link>{tool_url}</link>
 <description>{description}</description>
 <language>en-us</language>
 <copyright>Feed: GNU Free Documentation License; Images: see description page</copyright>
 <pubDate>{date}</pubDate>
 <lastBuildDate>{date}</lastBuildDate>
 <generator>CatFood</generator>
-<docs>{TOOL_URL}</docs>
-<image><url>{logo}</url><title>{title}</title><link>{TOOL_URL}</link></image>
+<docs>{tool_url}</docs>
+<image><url>{logo}</url><title>{title}</title><link>{tool_url}</link></image>
 "#,
             self_url = xml(self.self_url),
+            tool_url = xml(self.tool_url),
             description = xml(&description),
             logo = xml(&self.wiki.logo_url()),
         )?;
@@ -576,6 +580,7 @@ mod tests {
             items,
             size: 300,
             self_url: "https://catfood.toolforge.org/?category=A&user=B",
+            tool_url: "https://catfood.toolforge.org/catfood",
             legacy_host: "commons.wikimedia.org",
         }
         .to_string()

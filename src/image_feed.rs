@@ -51,6 +51,7 @@ pub async fn feed(
         category: &category,
         images: &images,
         now: Timestamp::now(),
+        base_url: &state.base_url,
     };
     wikimisc::metrics::counter!("feeds_served_total", "feed" => "commons_image_feed").increment(1);
     Ok(rss::response(
@@ -65,6 +66,8 @@ struct ImageFeed<'a> {
     category: &'a str,
     images: &'a [FileInfo],
     now: Timestamp,
+    /// Where the service is reachable
+    base_url: &'a str,
 }
 
 impl fmt::Display for ImageFeed<'_> {
@@ -80,13 +83,14 @@ impl fmt::Display for ImageFeed<'_> {
 <description/>
 <pubDate>{now}</pubDate>
 <lastBuildDate>{now}</lastBuildDate>
-<generator>https://catfood.toolforge.org/commons_image_feed</generator>
+<generator>{}/commons_image_feed</generator>
 "#,
             xml(self.category),
             xml(&title::page_url(
                 commons::COMMONS_SERVER,
                 &format!("Category:{}", self.category)
             )),
+            self.base_url,
         )?;
         for image in self.images {
             write_image(f, image, &now)?;
@@ -191,6 +195,7 @@ mod tests {
             category: "Varanus komodoensis",
             images: &[image],
             now: "20261024000000".parse().unwrap(),
+            base_url: "https://catfood.toolforge.org",
         }
         .to_string();
         assert!(
