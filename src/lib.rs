@@ -8,29 +8,24 @@ pub mod image_feed;
 pub mod params;
 pub mod routes;
 pub mod rss;
+pub mod source;
 pub mod timestamp;
 pub mod wiki;
 
 use std::path::Path;
-use std::time::Duration;
 use wikimisc::replicas::Replicas;
 use wikimisc::toolforge::db::Cluster;
 use wiki::Servers;
+
+pub use source::{Database, SingleWiki};
 
 /// The standalone Toolforge deployment.
 pub const DEFAULT_BASE_URL: &str = "https://catfood.toolforge.org";
 pub const DEFAULT_TOOL_URL: &str = "https://catfood.toolforge.org/catfood";
 
-/// Per database server. Tools may hold 10 connections in total, and Commons
-/// feeds use two servers (core and links tables).
-const POOL_MAX: usize = 5;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
-
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub replicas: Replicas,
-    pub servers: Servers,
+    pub database: Database,
     /// Where the service is reachable, without a trailing slash.
     pub base_url: String,
     /// The canonical URL of the main feed, without a trailing slash.
@@ -39,14 +34,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(
-        replicas: Replicas,
-        servers: Servers,
+        database: Database,
         base_url: impl Into<String>,
         tool_url: impl Into<String>,
     ) -> Self {
         Self {
-            replicas,
-            servers,
+            database,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             tool_url: tool_url.into().trim_end_matches('/').to_string(),
         }
@@ -56,13 +49,12 @@ impl AppState {
     /// `replica.my.cnf`, and the public Toolforge URLs.
     pub fn from_environment() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let replicas = Replicas::builder(Cluster::Web)
-            .pool_max(POOL_MAX)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .max_statement_time(QUERY_TIMEOUT)
+            .pool_max(5)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .max_statement_time(std::time::Duration::from_secs(60))
             .build()?;
         Ok(Self::new(
-            replicas,
-            Servers::default(),
+            Database::Replicas { replicas, servers: Servers::default() },
             DEFAULT_BASE_URL,
             DEFAULT_TOOL_URL,
         ))
@@ -76,10 +68,23 @@ impl AppState {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let replicas = Replicas::builder(Cluster::Web)
             .my_cnf_path(credentials)
-            .pool_max(POOL_MAX)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .max_statement_time(QUERY_TIMEOUT)
+            .pool_max(5)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .max_statement_time(std::time::Duration::from_secs(60))
             .build()?;
-        Ok(Self::new(replicas, Servers::default(), base_url, tool_url))
+        Ok(Self::new(
+            Database::Replicas { replicas, servers: Servers::default() },
+            base_url,
+            tool_url,
+        ))
+    }
+
+    /// The embedded service: one live MediaWiki database, not the replicas.
+    pub fn from_single(
+        single: SingleWiki,
+        base_url: impl Into<String>,
+        tool_url: impl Into<String>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Self::new(Database::single(single)?, base_url, tool_url))
     }
 }

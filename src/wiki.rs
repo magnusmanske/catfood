@@ -2,10 +2,11 @@
 
 use crate::db::WikiDb;
 use crate::error::AppError;
+use crate::source::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
-use wikimisc::replicas::Replicas;
+use wikimisc::commons;
 use wikimisc::title;
 
 /// Projects whose database name is `<language><project>`
@@ -45,42 +46,43 @@ pub struct Wiki {
     pub dbname: String,
     /// e.g. `https://en.wikipedia.org`
     pub server: String,
+    /// The project logo, for the RSS image element.
+    logo: String,
 }
 
 impl Wiki {
-    /// The wiki for the `language` and `project` parameters, e.g. `en` and
-    /// `wikipedia`
-    pub async fn resolve(
-        replicas: &Replicas,
-        servers: &Servers,
-        language: &str,
-        project: &str,
-    ) -> Result<Self, AppError> {
-        let dbname = dbname(language, project).ok_or(AppError::BadRequest("Invalid language."))?;
-        let server = servers
-            .get(replicas, &dbname)
-            .await?
-            .ok_or(AppError::UnknownWiki)?;
-        Ok(Self { dbname, server })
+    /// A Wikimedia wiki of the replicas.
+    pub fn replica(dbname: &str, server: &str) -> Self {
+        Self {
+            dbname: dbname.to_string(),
+            server: server.to_string(),
+            logo: format!("{server}/static/images/project-logos/{dbname}.png"),
+        }
+    }
+
+    /// The embedded deployment's single wiki.
+    pub fn single(dbname: &str, server: &str, _name: &str) -> Self {
+        Self {
+            dbname: dbname.to_string(),
+            server: server.to_string(),
+            logo: format!("{server}/favicon.ico"),
+        }
     }
 
     pub fn commons() -> Self {
-        Self {
-            dbname: "commonswiki".into(),
-            server: "https://commons.wikimedia.org".into(),
-        }
+        Self::replica("commonswiki", commons::COMMONS_SERVER)
     }
 
     /// e.g. `en.wikipedia.org`
     pub fn host(&self) -> &str {
-        self.server.strip_prefix("https://").unwrap_or(&self.server)
+        self.server
+            .strip_prefix("https://")
+            .or_else(|| self.server.strip_prefix("http://"))
+            .unwrap_or(&self.server)
     }
 
-    pub fn logo_url(&self) -> String {
-        format!(
-            "{}/static/images/project-logos/{}.png",
-            self.server, self.dbname
-        )
+    pub fn logo_url(&self) -> &str {
+        &self.logo
     }
 
     /// The URL of a page, given its title without the namespace prefix
@@ -129,10 +131,10 @@ pub fn is_code(s: &str) -> bool {
 pub struct Servers(Arc<OnceCell<HashMap<String, String>>>);
 
 impl Servers {
-    async fn get(&self, replicas: &Replicas, dbname: &str) -> Result<Option<String>, AppError> {
+    pub(crate) async fn get(&self, database: &Database, dbname: &str) -> Result<Option<String>, AppError> {
         let servers = self
             .0
-            .get_or_try_init(|| async { WikiDb::new(replicas, "meta").servers().await })
+            .get_or_try_init(|| async { WikiDb::new(database, "meta").servers().await })
             .await?;
         Ok(servers.get(dbname).cloned())
     }

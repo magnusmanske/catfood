@@ -6,11 +6,11 @@
 //! tables, which is the same one on all other wikis.
 
 use crate::error::AppError;
+use crate::source::Database;
 use crate::timestamp::Timestamp;
 use std::collections::{HashMap, HashSet};
 use wikimisc::mysql_async::prelude::{FromRow, Queryable};
 use wikimisc::mysql_async::{Row, Value, from_row_opt};
-use wikimisc::replicas::Replicas;
 use wikimisc::toolforge::db::ExtensionDb;
 
 const CATEGORY_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
@@ -72,13 +72,13 @@ pub struct FileInfo {
 
 /// The replica databases of one wiki
 pub struct WikiDb<'a> {
-    replicas: &'a Replicas,
+    database: &'a Database,
     dbname: &'a str,
 }
 
 impl<'a> WikiDb<'a> {
-    pub fn new(replicas: &'a Replicas, dbname: &'a str) -> Self {
-        Self { replicas, dbname }
+    pub fn new(database: &'a Database, dbname: &'a str) -> Self {
+        Self { database, dbname }
     }
 
     /// Runs a prepared statement. Rows are converted without panicking on
@@ -89,10 +89,7 @@ impl<'a> WikiDb<'a> {
         sql: &str,
         params: Vec<Value>,
     ) -> Result<Vec<T>, AppError> {
-        let mut conn = self
-            .replicas
-            .connect_for_tables(self.dbname, tables)
-            .await?;
+        let mut conn = self.database.conn(self.dbname, tables).await?;
         let rows: Vec<Row> = conn.exec(sql, params).await?;
         rows.into_iter()
             .map(|row| from_row_opt(row).map_err(AppError::from))

@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Needs $DASHBOARD_TOKEN; `server::serve` sends the final push on shutdown
     let _telemetry = telemetry::install_web(env!("CARGO_PKG_VERSION"), None);
     let state = AppState::from_environment()?;
-    let replicas = state.replicas.clone();
+    let database = state.database.clone();
     let port = std::env::var("PORT")
         .ok()
         .and_then(|port| port.parse().ok())
@@ -20,6 +20,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
     tracing::info!("listening on port {port}");
     server::serve(listener, catfood::routes::router(state)).await?;
-    replicas.disconnect().await?;
+    database.disconnect().await?;
     Ok(())
 }

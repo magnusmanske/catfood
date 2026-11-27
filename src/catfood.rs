@@ -45,13 +45,13 @@ pub async fn feed(
     if namespace < 0 {
         return Ok(no_files());
     }
-    let wiki = Wiki::resolve(&state.replicas, &state.servers, language, project).await?;
+    let wiki = state.database.resolve(language, project).await?;
     let limit = params
         .int("last")
         .unwrap_or(DEFAULT_ITEMS.into())
         .clamp(1, MAX_ITEMS.into());
     let limit = u32::try_from(limit).unwrap_or(DEFAULT_ITEMS);
-    let items = fetch(&WikiDb::new(&state.replicas, &wiki.dbname), &source, limit).await?;
+    let items = fetch(&WikiDb::new(&state.database, &wiki.dbname), &source, limit).await?;
     if items.is_empty() {
         return Ok(no_files());
     }
@@ -353,7 +353,7 @@ impl fmt::Display for Feed<'_> {
             self_url = xml(self.self_url),
             tool_url = xml(self.tool_url),
             description = xml(&description),
-            logo = xml(&self.wiki.logo_url()),
+            logo = xml(self.wiki.logo_url()),
         )?;
         for item in self.items {
             self.write_item(f, item)?;

@@ -21,6 +21,7 @@ const DEFAULT_IMAGES: u32 = 100;
 const MAX_IMAGES: u32 = 1000;
 /// The smallest standard thumbnail width of at least the traditional 75px
 const THUMB_WIDTH: u32 = 120;
+const FILE_NAMESPACE: i64 = 6;
 
 pub async fn feed(
     State(state): State<AppState>,
@@ -34,8 +35,8 @@ pub async fn feed(
     if category.is_empty() {
         return Ok(form(max_images));
     }
-    let wiki = Wiki::commons();
-    let db = WikiDb::new(&state.replicas, &wiki.dbname);
+    let wiki = state.database.commons();
+    let db = WikiDb::new(&state.database, &wiki.dbname);
     // Some files may still not be bitmaps, so ask for more than needed
     let names = db
         .random_bitmaps(&title::to_db_key(&category), max_images * 2)
@@ -52,6 +53,8 @@ pub async fn feed(
         images: &images,
         now: Timestamp::now(),
         base_url: &state.base_url,
+        wiki: &wiki,
+        single: state.database.is_single(),
     };
     wikimisc::metrics::counter!("feeds_served_total", "feed" => "commons_image_feed").increment(1);
     Ok(rss::response(
@@ -68,61 +71,86 @@ struct ImageFeed<'a> {
     now: Timestamp,
     /// Where the service is reachable
     base_url: &'a str,
+    /// Commons for the replicas, the local wiki when embedded
+    wiki: &'a Wiki,
+    single: bool,
 }
 
 impl fmt::Display for ImageFeed<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let now = self.now.rss();
+        let title = if self.single {
+            format!("Category \"{}\" on {}", xml(self.category), xml(self.wiki.host()))
+        } else {
+            format!("Category \"{}\" on Wikimedia Commons", xml(self.category))
+        };
         write!(
             f,
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
 <channel>
-<title>Category "{}" on Wikimedia Commons</title>
+<title>{title}</title>
 <link>{}</link>
 <description/>
 <pubDate>{now}</pubDate>
 <lastBuildDate>{now}</lastBuildDate>
 <generator>{}/commons_image_feed</generator>
 "#,
-            xml(self.category),
             xml(&title::page_url(
-                commons::COMMONS_SERVER,
+                &self.wiki.server,
                 &format!("Category:{}", self.category)
             )),
             self.base_url,
         )?;
         for image in self.images {
-            write_image(f, image, &now)?;
+            write_image(f, image, &now, self.wiki, self.single)?;
         }
         f.write_str("</channel>\n</rss>\n")
     }
 }
 
-fn write_image(f: &mut fmt::Formatter, image: &FileInfo, now: &impl fmt::Display) -> fmt::Result {
+fn write_image(
+    f: &mut fmt::Formatter,
+    image: &FileInfo,
+    now: &impl fmt::Display,
+    wiki: &Wiki,
+    single: bool,
+) -> fmt::Result {
     let title = xml(&nice_title(&image.name)).into_owned();
-    let page_url = xml(&commons::file_page_url(&image.name)).into_owned();
-    let image_url = xml(&commons::upload_url(&image.name)).into_owned();
     let FileInfo {
         width,
         height,
         size,
         ..
     } = *image;
-    // Bitmaps can't be scaled up
-    let (thumb_url, thumb_width) = match width > THUMB_WIDTH {
-        true => (
-            xml(&commons::thumb_url(&image.name, THUMB_WIDTH)).into_owned(),
-            THUMB_WIDTH,
-        ),
-        false => (image_url.clone(), width),
+    let (page_url, image_url, thumb_url, thumb_width, guid) = if single {
+        let server = &wiki.server;
+        let page_url = wiki.page_url(FILE_NAMESPACE, &image.name, image.page_id);
+        let image_url = commons::redirect_file_url(server, &image.name, None);
+        let (thumb_url, thumb_width) = match width > THUMB_WIDTH {
+            true => (
+                commons::redirect_file_url(server, &image.name, Some(THUMB_WIDTH)),
+                THUMB_WIDTH,
+            ),
+            false => (image_url.clone(), width),
+        };
+        let guid = commons::redirect_file_url(server, &image.name, None);
+        (xml(&page_url).into_owned(), xml(&image_url).into_owned(), xml(&thumb_url).into_owned(), thumb_width, xml(&guid).into_owned())
+    } else {
+        let page_url = commons::file_page_url(&image.name);
+        let image_url = commons::upload_url(&image.name);
+        // Bitmaps can't be scaled up
+        let (thumb_url, thumb_width) = match width > THUMB_WIDTH {
+            true => (commons::thumb_url(&image.name, THUMB_WIDTH), THUMB_WIDTH),
+            false => (image_url.clone(), width),
+        };
+        let guid = format!(
+            "{}/wiki/Special:Redirect/file/{}",
+            commons::COMMONS_SERVER,
+            php_urlencode(&image.name)
+        );
+        (xml(&page_url).into_owned(), xml(&image_url).into_owned(), xml(&thumb_url).into_owned(), thumb_width, xml(&guid).into_owned())
     };
-    // As in the PHP version
-    let guid = format!(
-        "{}/wiki/Special:Redirect/file/{}",
-        commons::COMMONS_SERVER,
-        php_urlencode(&image.name)
-    );
     let mime = xml(&image.mime).into_owned();
     write!(
         f,
@@ -154,7 +182,7 @@ fn nice_title(name: &str) -> String {
 
 fn form(max_images: u32) -> Response {
     let body = format!(
-        r#"<p>Generates RSS feeds for screensavers from Wikimedia Commons categories (<a href="?category=Varanus%20komodoensis">example</a>).</p>
+        r#"<p>Generates RSS feeds for screensavers from the wiki's file categories (<a href="?category=Varanus%20komodoensis">example</a>).</p>
 <form method="get">
 <table class="table table-sm">
 <tr><th>Category</th><td><input class="form-control" type="text" name="category" value=""></td><td></td></tr>
@@ -163,7 +191,7 @@ fn form(max_images: u32) -> Response {
 </table>
 </form>"#
     );
-    html::page("Commons image feed", &body)
+    html::page("Image feed", &body)
 }
 
 #[cfg(test)]
@@ -196,6 +224,8 @@ mod tests {
             images: &[image],
             now: "20261024000000".parse().unwrap(),
             base_url: "https://catfood.toolforge.org",
+            wiki: &Wiki::commons(),
+            single: false,
         }
         .to_string();
         assert!(

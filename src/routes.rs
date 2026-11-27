@@ -12,9 +12,6 @@ use std::time::Duration;
 use wikimisc::server;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
-/// The default wiki of both feeds
-const HEALTH_DB: &str = "commonswiki";
 
 pub fn router(state: AppState) -> Router {
     let router = Router::new()
@@ -48,16 +45,11 @@ fn moved_to(path: &'static str) -> MethodRouter<AppState> {
 
 /// `OK` if a database connection is available
 async fn health(State(state): State<AppState>) -> (StatusCode, &'static str) {
-    match tokio::time::timeout(HEALTH_TIMEOUT, state.replicas.pool().connect(HEALTH_DB)).await {
-        Ok(Ok(_)) => (StatusCode::OK, "OK"),
-        Ok(Err(error)) => {
-            tracing::warn!("health check failed: {error}");
-            (StatusCode::SERVICE_UNAVAILABLE, "No database connection")
-        }
-        Err(_) => {
-            tracing::warn!("health check timed out");
-            (StatusCode::SERVICE_UNAVAILABLE, "No database connection")
-        }
+    if state.database.healthy().await {
+        (StatusCode::OK, "OK")
+    } else {
+        tracing::warn!("health check failed");
+        (StatusCode::SERVICE_UNAVAILABLE, "No database connection")
     }
 }
 
@@ -96,8 +88,10 @@ mod tests {
             .build()
             .unwrap();
         router(AppState::new(
-            replicas,
-            Servers::default(),
+            crate::source::Database::Replicas {
+                replicas,
+                servers: Servers::default(),
+            },
             TEST_BASE,
             format!("{TEST_BASE}/catfood"),
         ))
